@@ -7,6 +7,8 @@
 !tracking/**
 !utils/**
 !.gitignore
+!config/**
+!motion_module/**
 
 # --- 3. 强力过滤 (防止白名单里混入垃圾) ---
 # 注意：这些必须放在白名单之后，否则无效

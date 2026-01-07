@@ -1,0 +1,105 @@
+dataset: 'kitti'
+
+dataset_path: '/datav/DeepFusionMOT/data/kitti'
+spilt: 'training'
+
+
+# 实验命名解析：
+# iou阈值_检测器_是否启用CMC(是否去除检测内点)_是否启用LTRB_QPR是否优化
+# _3D轨迹的运动补偿中补偿的旋转角delta是否包含从rect到IMU，IMU又转换回rect的部分
+# _卡尔曼滤波器update中车头车尾不分时以轨迹还是检测为准
+
+# !!!!!!!!!!!!!!!使用ltrbc时不要忘记将metric_2d设为iou_2d_c
+
+#------------------------ Root path define ----------------------
+root_path: 'debug/KITTI'
+# save_path: '0.55_3dvc2dx1280_noexcmc_ltrbc_70c_r2i_apollokitti_cv_c40_hits4/KITTI/training'
+# eval_save_path: '0.55_3dvc2dx1280_noexcmc_ltrbc_70c_r2i_apollokitti_cv_c40_hits4/KITTI/data/training'
+dets_path_3d: "data/detections/3D"
+dets_path_2d: "data/detections/2D"
+# combine_root_dir: "0.55_3dvc2dx1280_noexcmc_ltrbc_70c_r2i_apollokitti_cv_c40_hits4/KITTI/training"
+# eval_root_dir: '0.55_3dvc2dx1280_noexcmc_ltrbc_70c_r2i_apollokitti_cv_c40_hits4/KITTI/training'
+save_2d_image: "False"
+# ------------------------CMC--------------------------
+if_cmc: "True"
+ex_cfg: "cmc_no_ex_yolox/training/image_02/"
+# ex_cfg: "cmc_with_ex_yolox/training/image_02/"
+kfstate_2d: "ltrb"
+
+#------------------------Motion model--------------------------
+motion_model: "CV"
+# r2i默认为True，效果更好
+cmc_with_rect2imu : "True"
+
+#------------------------Dataset spilt--------------------------
+#tracking_seqs: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28]
+tracking_seqs: [0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20]
+
+
+#----------------------------Detector--------------------------
+# detector_2d: 'rrc'
+detector_2d: 'yolox'
+# detector_3d: 'pointrcnn'
+detector_3d: 'virconv'
+# detector_3d: 'casa'
+
+
+
+
+#----------------------------Category--------------------------
+#cat_list: ['Car', 'Pedestrian']
+cat_list: ['Car']
+
+
+#----------------------------Hyperparameter--------------------------
+#If you want a better result, re-adjust the following hyperparameter
+use_fga: "True"
+remain_threshold_2d: 1
+Car:
+  max_ages: 25
+  min_frames: 4
+  # metric_3d: iou_3d
+  metric_3d: ro_gdiou_3d
+  metric_2d: iou_2d
+  # metric_2d: iou_2d_c
+  cost_function:
+      iou_2d: 0.55
+      iou_2d_c: 0.55
+      sdiou_2d: 1.1
+      giou_3d: -0.2
+      # iou_3d: 0.1
+      iou_3d: 0.01
+      dist_3d: 1.1
+      ro_gdiou_3d: -0.25
+  cost_options:
+    iou_2d_c:
+      w: 0.4
+    ro_gdiou_3d:
+      w1: 0.5
+      w2: 1.5
+  fga:
+    # FGA模式下
+    # 跟踪时只使用置信度大于junk_conf的检测结果
+    # 分阶段匹配时分为三类，高分(置信度大于high_conf)
+    # 低分但高分类(置信度小于high_conf但分类置信度大于cls_high)
+    # 低分且低分类(置信度小于high_conf且分类置信度小于cls_high)
+    # 一般模式下
+    # 跟踪时只使用置信度大于high_conf的检测结果
+    junk_conf: 0.2
+    high_conf: 0.4
+    loc_thresh:  0.65
+  use_rv_match: "True"      # 是否开启MCTrack的RV二阶段匹配
+  rv_metric: sdiou_2d       # RV阶段使用的度量，MCTrack论文推荐SDIoU
+  rv_threshold: 0.5         # RV阶段的匹配阈值
+
+Pedestrian:
+  metric_3d: iou_3d
+  metric_2d: iou_2d
+  max_ages: 25
+  min_frames: 3
+  cost_function:
+      iou_2d: 0.55
+      sdiou_2d: 0.2
+      giou_3d: -0.2
+      iou_3d: 0.01
+      dist_3d: 1.1

@@ -20,14 +20,30 @@ class DeepFusionMOT():
         self.reorder_back = [6, 5, 4, 0, 1, 2, 3]
         self.frame_count = 0
         self.use_cmc = cfg.if_cmc
-
+    def get_calib_p2(self, calib_file):
+        """
+        从标定文件中读取 P2 矩阵 (3x4)
+        """
+        if not os.path.exists(calib_file):
+            return None
+            
+        with open(calib_file, 'r') as f:
+            for line in f.readlines():
+                if line.startswith('P2:'):
+                    # 提取数字 P2: a b c ...
+                    data = line.split()[1:]
+                    P2 = np.array([float(x) for x in data]).reshape(3, 4)
+                    return P2
+        return None
     def update(self, dets_3d_fusion, dets_2d_high, dets_2d_low, dets_3d_only, cfg, frame, seq_id):
         calib_file = os.path.join(cfg.dataset_path, cfg.spilt, 'calib' + "/" + str(seq_id).zfill(4) + '.txt')
         oxts_file = os.path.join(cfg.dataset_path, cfg.spilt, 'oxts' + "/" + str(seq_id).zfill(4) + '.txt')
         cmc_file = os.path.join(cfg.dataset_path, cfg.spilt, 'cmc_folder', cfg.ex_cfg, str(seq_id).zfill(4) + '.txt')
         imu_poses = load_oxts(oxts_file)
         cmc_transforms = load_cmcs(cmc_file)
-
+        
+        calib_p2 = self.get_calib_p2(calib_file)
+        
         dets_3d_fusion_camera = np.array(dets_3d_fusion['dets_3d_fusion'])
         dets_3d_fusion_info = np.array(dets_3d_fusion['dets_3d_fusion_info'])
         dets_3d_only_camera = np.array(dets_3d_only['dets_3d_only'])
@@ -65,7 +81,7 @@ class DeepFusionMOT():
         #     self.tracker.ego_motion_compensation_2d_imu(frame, calib_file, imu_poses)
             
         # ------------------------- Track update ------------------------
-        self.tracker.update(dets_3d_fusion_camera, dets_3d_only_camera, dets_2d_high_obj, dets_2d_low_obj)
+        self.tracker.update(dets_3d_fusion_camera, dets_3d_only_camera, dets_2d_high_obj, dets_2d_low_obj, calib_p2=calib_p2)
         # --------------------------- Outputs ----------------------------
         self.frame_count += 1
         outputs = []

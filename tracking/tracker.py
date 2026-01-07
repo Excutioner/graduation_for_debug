@@ -2,11 +2,12 @@
 # Emial: 1393196999@qq.com
 
 import numpy as np
+from scipy.optimize import linear_assignment 
+from tracking.cost_function import iou_2d, sdiou_2d 
 
 from tracking.matching import associate_dets_to_trks_fusion, associate_2D_to_3D_tracking
 from tracking.track_2d import Track_2D
 from tracking.track_3d import Track_3D
-
 
 class Tracker():
     def __init__(self, cfg, category):
@@ -29,6 +30,7 @@ class Tracker():
         cost_opts = self.cfg[category].get('cost_options', {})
         self.ro_gdiou_params = cost_opts.get('ro_gdiou_3d', {}) 
         self.iou_2d_c_params = cost_opts.get('iou_2d_c', {}) 
+        # [MCTrack Params]
         self.use_rv_match = cfg[category].get('use_rv_match', "False")
         self.rv_metric = cfg[category].get('rv_metric', 'sdiou_2d')
         self.rv_threshold = cfg[category].get('rv_threshold', 0.5)
@@ -44,6 +46,7 @@ class Tracker():
             self.kf_2d = kalman_filter_2d.KalmanFilter()
         else :
             raise ValueError("kfstate_2d must be ltrb、ltrbc or xyah")
+        
         if self.motion_model == "CTRA":
             from tracking.extend_kalman_fileter_3d_ctra import KalmanBoxTracker
         elif self.motion_model == "CTRV":
@@ -53,7 +56,63 @@ class Tracker():
         else :
             raise ValueError("motion_model must be CTRA、CTRV or CV")
         self.KalmanBoxTracker_Class = KalmanBoxTracker
+    def project_track_to_2d(self, track, calib_p2):
+        """
+        利用 3D 预测位置计算当前的 2D 框 (x1, y1, x2, y2)
+        """
+        # 1. 获取 3D 状态 [x, y, z, rot_y, l, w, h]
+        # 注意：DeepFusionMOT 中 pose 的顺序通常被重排为 [x, y, z, rot_y, l, w, h]
+        pose = track.pose
+        x, y, z = pose[0], pose[1], pose[2]
+        ry = pose[3]
+        l, w, h = pose[4], pose[5], pose[6]
 
+        # 2. 构建 3D Bounding Box 的 8 个角点 (Camera Coordinate: x-right, y-down, z-forward)
+        # 假设 (x,y,z) 是底部中心 (KITTI 标准)
+        c = np.cos(ry)
+        s = np.sin(ry)
+        R = np.array([[c, 0, s], [0, 1, 0], [-s, 0, c]])
+
+        # 3D 框的 8 个角点 (相对于中心)
+        # x: +/- l/2, y: 0 to -h, z: +/- w/2
+        x_corners = [l/2, l/2, -l/2, -l/2, l/2, l/2, -l/2, -l/2]
+        y_corners = [0, 0, 0, 0, -h, -h, -h, -h]
+        z_corners = [w/2, -w/2, -w/2, w/2, w/2, -w/2, -w/2, w/2]
+
+        corners_3d = np.vstack([x_corners, y_corners, z_corners])  # (3, 8)
+        
+        # 旋转并平移
+        corners_3d = np.dot(R, corners_3d)
+        corners_3d[0, :] += x
+        corners_3d[1, :] += y
+        corners_3d[2, :] += z
+
+        # 3. 投影到 2D 图像平面
+        # 扩展为齐次坐标 (4, 8)
+        corners_3d_hom = np.vstack((corners_3d, np.ones((1, 8))))
+        
+        # 应用投影矩阵 P2 (3, 4)
+        corners_2d = np.dot(calib_p2, corners_3d_hom)
+        
+        # 归一化 (x/z, y/z)
+        # 防止除以0
+        epsilon = 1e-5
+        corners_2d[2, :] = np.maximum(corners_2d[2, :], epsilon) 
+        
+        corners_2d[0, :] /= corners_2d[2, :]
+        corners_2d[1, :] /= corners_2d[2, :]
+        
+        # 4. 获取 2D 包围盒 (Min-Max)
+        min_x = np.min(corners_2d[0, :])
+        min_y = np.min(corners_2d[1, :])
+        max_x = np.max(corners_2d[0, :])
+        max_y = np.max(corners_2d[1, :])
+        
+        # 边界保护 (简单的非负约束)
+        min_x = max(0, min_x)
+        min_y = max(0, min_y)
+        
+        return np.array([min_x, min_y, max_x, max_y])
     def predict_3d(self):
         # tracks_3d的定义：self.tracks_3d.append(Track_3D(pose, self.kf_3d, self.track_id_3d, self.min_frames, self.max_age, self.additional_info))
         for track in self.tracks_3d:
@@ -84,7 +143,7 @@ class Tracker():
     def ego_motion_compensation_2d_imu(self, frame, calib_file, oxts):
         for track in self.tracks_2d:
             track.ego_motion_compensation_2d_imu(frame, calib_file, oxts)
-    def update(self, dets_3d_fusion, dets_3d_only, dets_2d_high, dets_2d_low):
+    def update(self, dets_3d_fusion, dets_3d_only, dets_2d_high, dets_2d_low, calib_p2=None):
         # 1st Level of Association
         matched_fusion_idx, unmatched_dets_fusion_idx, unmatched_trks_fusion_idx = associate_dets_to_trks_fusion(
             dets_3d_fusion, self.tracks_3d, self.cost_3d, self.threshold_3d, metric='match_3d', cost_params=self.ro_gdiou_params)
@@ -101,8 +160,71 @@ class Tracker():
         #  2nd Level of Association
         # 找出一阶段未匹配的3D轨迹
         self.unmatch_tracks_3d1 = [t for t in self.tracks_3d if t.time_since_update > 0]
-        matched_only_idx, unmatched_dets_only_idx, _ = associate_dets_to_trks_fusion(
+        # --- Stage 1: 原始 BEV/3D 匹配 ---
+        matched_only_idx, unmatched_dets_only_idx, unmatched_trks_only_idx_local = associate_dets_to_trks_fusion(
             dets_3d_only, self.unmatch_tracks_3d1, self.cost_3d, self.threshold_3d, metric='match_3d', cost_params=self.ro_gdiou_params)
+
+        # --- Stage 2: MCTrack RV (2D) 补救匹配 ---
+        # 只有在开关开启、P2存在、且有残余匹配项时才执行
+        if (self.use_rv_match == "True") and (calib_p2 is not None) and \
+           (len(unmatched_trks_only_idx_local) > 0) and (len(unmatched_dets_only_idx) > 0):
+
+            # 1. 准备 Stage 1 剩下的 Candidates
+            candidate_trks = [self.unmatch_tracks_3d1[i] for i in unmatched_trks_only_idx_local]
+            candidate_dets = [dets_3d_only[i] for i in unmatched_dets_only_idx]
+
+            # 2. 构建 Cost Matrix (RV 空间)
+            num_dets = len(candidate_dets)
+            num_trks = len(candidate_trks)
+            cost_matrix_rv = np.zeros((num_dets, num_trks), dtype=np.float32)
+
+            # 预计算 Tracks 的 2D 投影 (减少循环内计算)
+            trks_2d_boxes = [self.project_track_to_2d(t, calib_p2) for t in candidate_trks]
+            
+            # Dets 的 2D 框直接获取 (无需投影)
+            # 根据 main.py，additional_info 索引 2:6 是 [x1, y1, x2, y2]
+            dets_2d_boxes = [d.additional_info[2:6] for d in candidate_dets]
+
+            # 计算矩阵
+            for d in range(num_dets):
+                for t in range(num_trks):
+                    if self.rv_metric == 'sdiou_2d':
+                        score = sdiou_2d(dets_2d_boxes[d], trks_2d_boxes[t])
+                    else:
+                        score = iou_2d(dets_2d_boxes[d], trks_2d_boxes[t])
+                    cost_matrix_rv[d, t] = score
+
+            # 3. 匈牙利匹配 (注意取反，因为 linear_assignment 求最小代价)
+            matched_indices_rv = linear_assignment(-cost_matrix_rv)
+
+            # 4. 整合匹配结果
+            rv_matched_det_local_indices = [] # 记录在 RV 阶段被匹配掉的局部索引
+
+            for m in matched_indices_rv:
+                d_idx, t_idx = m[0], m[1]
+                score = cost_matrix_rv[d_idx, t_idx]
+                
+                if score >= self.rv_threshold:
+                    # 映射回原始索引
+                    # Detection 原始索引
+                    original_det_idx = unmatched_dets_only_idx[d_idx]
+                    # Track 原始索引 (在 self.unmatch_tracks_3d1 中的索引)
+                    original_trk_idx = unmatched_trks_only_idx_local[t_idx]
+                    
+                    # 添加到总匹配列表
+                    matched_only_idx = np.vstack((matched_only_idx, [original_det_idx, original_trk_idx]))
+                    
+                    # 标记该 Detection 已被 RV 阶段抢救
+                    rv_matched_det_local_indices.append(original_det_idx)
+
+            # 5. 更新 Unmatched Dets 列表 (剔除 RV 阶段匹配成功的)
+            # 注意：unmatched_trks 不需要显式更新，因为后续代码是通过 matched_only_idx 来更新 Track 状态的
+            new_unmatched_dets = []
+            for det_idx in unmatched_dets_only_idx:
+                if det_idx not in rv_matched_det_local_indices:
+                    new_unmatched_dets.append(det_idx)
+            unmatched_dets_only_idx = np.array(new_unmatched_dets, dtype=int)
+            
         index_to_delete = []
         for detection_idx, track_idx in matched_only_idx:
             for index, t in enumerate(self.tracks_3d):

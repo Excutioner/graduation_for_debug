@@ -1,7 +1,7 @@
 # -*-coding:utf-8-*
 # author: wangxy
 import numpy as np
-from tracking.cost_function import iou_2d, giou_2d, sdiou_2d, diou_2d, giou_3d, dist_3d
+from tracking.cost_function import iou_2d, giou_2d, sdiou_2d, diou_2d, giou_3d, dist_3d, iou_2d_c, ro_gdiou_3d
 
 
 def linear_assignment(cost_matrix):
@@ -15,16 +15,20 @@ def linear_assignment(cost_matrix):
         return np.array(list(zip(x, y)))
 
 
-def kitti_cost(dets, trks, iou_threshold, iou_matrix, cost_func):
-    matched_indices, _ = cost_calculate(dets, trks, iou_matrix, iou_threshold, cost_func)
+def kitti_cost(dets, trks, iou_threshold, iou_matrix, cost_func, cost_params=None):
+    if cost_params is None: cost_params = {}
+    matched_indices, _ = cost_calculate(dets, trks, iou_matrix, iou_threshold, cost_func, cost_params)
     return matched_indices
 
 
-def cost_calculate(dets, trks, iou_matrix, iou_threshold, cost_func):
+def cost_calculate(dets, trks, iou_matrix, iou_threshold, cost_func, cost_params=None):
+    if cost_params is None: cost_params = {}
     for d, det in enumerate(dets):
         for t, trk in enumerate(trks):
             if cost_func == 'iou_2d':
                 iou_matrix[d, t] = iou_2d(det, trk)  # det: 8 x 3, trk: 8 x 3
+            elif cost_func == 'iou_2d_c':
+                iou_matrix[d, t] = iou_2d_c(det, trk, **cost_params)
             elif cost_func == 'giou_2d':
                 iou_matrix[d, t] = giou_2d(det, trk)
             elif cost_func == 'sdiou_2d':
@@ -35,6 +39,9 @@ def cost_calculate(dets, trks, iou_matrix, iou_threshold, cost_func):
                 iou_matrix[d, t] = giou_3d(det, trk, cost_func)
             elif cost_func == 'dist_3d':
                 iou_matrix[d, t] = dist_3d(det, trk)
+            elif cost_func == 'ro_gdiou_3d':
+                # 默认权重 w1=1, w2=1，对应论文中两个框相距很远时趋向于 -2
+                iou_matrix[d, t] = ro_gdiou_3d(det, trk, **cost_params)
     if min(iou_matrix.shape) > 0:
         a = (iou_matrix > iou_threshold).astype(np.int32)
         if a.sum(1).max() == 1 and a.sum(0).max() == 1:
@@ -47,21 +54,30 @@ def cost_calculate(dets, trks, iou_matrix, iou_threshold, cost_func):
     return matched_indices, iou_matrix
 
 
-def associate_dets_to_trks_fusion(dets, trks, cost_func, iou_threshold, metric):
+def associate_dets_to_trks_fusion(dets, trks, cost_func, cost_threshold, metric='match_3d', cost_params=None):
+    if cost_params is None:
+        cost_params = {}
     if (len(trks) == 0):
         return np.empty((0, 2), dtype=int), np.arange(len(dets)), []
     if (len(dets) == 0):
         return np.empty((0, 2), dtype=int), [], np.arange(len(trks))
     iou_matrix = np.zeros((len(dets), len(trks)), dtype=np.float32)
     if metric == 'match_3d':
-        matched_indices = kitti_cost(dets, trks, iou_threshold, iou_matrix, cost_func)
-    # matched_indices = nuscenes_cost(detections, trackers, iou_matrix)
+        matched_indices = kitti_cost(dets, trks, cost_threshold, iou_matrix, cost_func, cost_params)    # matched_indices = nuscenes_cost(detections, trackers, iou_matrix)
     elif metric == 'match_2d':
-        dets = np.array([d.to_x1y1x2y2() for d in dets])
-        trks = np.array([t.to_x1y1x2y2() for t in trks])
-        matched_indices, _ = cost_calculate(dets, trks, iou_matrix, iou_threshold, cost_func)
-
-    return is_matched(dets, trks, matched_indices, iou_matrix, iou_threshold)
+        if cost_func == 'iou_2d_c':
+            # 如果使用带置信度的IoU，需要提取 x1,y1,x2,y2,conf
+            # Detection_2D 需要实现 to_x1y1x2y2c() 或类似方法
+            # Track_2D 需要实现 to_x1y1x2y2c()
+            dets_array = np.array([d.to_x1y1x2y2c() for d in dets]) 
+            trks_array = np.array([t.to_x1y1x2y2c() for t in trks])
+            matched_indices = kitti_cost(dets_array, trks_array, cost_threshold, iou_matrix, cost_func, cost_params)        
+        else:
+            # 传统逻辑，只取坐标
+            dets_array = np.array([d.to_x1y1x2y2() for d in dets])
+            trks_array = np.array([t.to_x1y1x2y2() for t in trks])
+            matched_indices = kitti_cost(dets_array, trks_array, cost_threshold, iou_matrix, cost_func, cost_params)
+    return is_matched(dets, trks, matched_indices, iou_matrix, cost_threshold)
 
 
 def trackfusion2Dand3D(trks_2d, trks_3Dto2D_image, iou_threshold):

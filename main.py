@@ -7,6 +7,7 @@ from os.path import join
 import cv2
 import numpy as np
 
+from datasets.coordinate_transformation import convert_x1y1x2y2c_to_tlwhc
 from datasets.coordinate_transformation import convert_x1y1x2y2_to_tlwh
 from tracking.DeepFusionMOT import DeepFusionMOT
 from utils.config import Config
@@ -15,6 +16,13 @@ from utils.combine_trk_cat import combine_category_result
 from datasets.data_fusion import data_fusion
 from utils.save_results import save_results
 
+# 以下为debug专用
+# import debugpy
+# # 保证host与container的端口一致，listen可以只设置端口，则为localhost，否则设置成（host，port）
+# debugpy.listen(12345)
+# print("Waiting for debugger attach")
+# debugpy.wait_for_client()
+# print("Debugger attached")
 
 def tracking(cfg):
     spilt = cfg.spilt
@@ -22,15 +30,20 @@ def tracking(cfg):
     total_time, total_frames = 0, 0
 
     for category in cfg.cat_list:
+        junk_conf = cfg[category]["fga"]["junk_conf"]
+        high_conf = cfg[category]["fga"]["high_conf"]
+        loc_thresh = cfg[category]["fga"]["loc_thresh"] # LGTrack 新增参数
         for seq_id in tqdm.trange(len(seq_list)):
             # ----------------------------- Initialize tracker -------------------------
             tracker = DeepFusionMOT(cfg, category)
             seq_name = str(seq_id).zfill(4)
-
             dets_path_3d = os.path.join(cfg.dets_path_3d, cfg.detector_3d, spilt, category) + "/" + str(seq_id).zfill(4) + '.txt'
             dets_path_2d = os.path.join(cfg.dets_path_2d, cfg.detector_2d, spilt, category) + "/" + str(seq_id).zfill(4) + '.txt'
             image_02_path = os.path.join(cfg.dataset_path, spilt, 'image_02') + "/" + str(seq_id).zfill(4)
-            image_filenames = [join(image_02_path, x) for x in os.listdir(image_02_path)]
+            filenames = os.listdir(image_02_path)
+            sorted_filenames = sorted(filenames)
+            image_filenames = [join(image_02_path, x) for x in sorted_filenames]
+            # print(image_filenames)
             dets_3d = np.loadtxt(dets_path_3d, delimiter=',')  # load 3D detections, N x 15
             dets_2d = np.loadtxt(dets_path_2d, delimiter=',')
 
@@ -45,37 +58,96 @@ def tracking(cfg):
             #     mask_2d = det_scores_2d > 0.4
             #     dets_2d = dets_2d[mask_2d]
 
-            min_frame, max_frame = 0, len(image_filenames)
 
+            min_frame, max_frame = 0, len(image_filenames)
             for frame in tqdm.trange(max_frame):
                 img0_path = image_filenames[frame]
                 img_0 = cv2.imread(img0_path)
                 dets_3d_camera = dets_3d[dets_3d[:, 0] == frame, 7:14]  # 3D bounding box(h,w,l,x,y,z,theta)
 
-                ori_array = dets_3d[dets_3d[:, 0] == frame, -1].reshape((-1, 1))
-                other_array = dets_3d[dets_3d[:, 0] == frame, 1:7]
+                ori_array = dets_3d[dets_3d[:, 0] == frame, -1].reshape((-1, 1)) # alpha
+                other_array = dets_3d[dets_3d[:, 0] == frame, 1:7] # 3D检测器中的 type + 2D BBOX + score
                 additional_info = np.concatenate((ori_array, other_array), axis=1)
+                dets_3dto2d_image = dets_3d[dets_3d[:, 0] == frame, 2:6] # 3D检测器中的 2D BBOX
 
-                dets_3dto2d_image = dets_3d[dets_3d[:, 0] == frame, 2:6]
-
-                if len(dets_2d):
-                    dets_2d_frame = dets_2d[dets_2d[:, 0] == frame, 1:5]  # 2D bounding box(x1,y1,x2,y2)
+                frame_mask = (dets_2d[:, 0] == frame) & (dets_2d[:, 5] > junk_conf)
+                current_dets = dets_2d[frame_mask]
+                dets_high = np.empty((0, 7))
+                dets_low_valid = np.empty((0, 7))
+                if len(current_dets) > 0:
+                    scores_final = current_dets[:, 5]
+                    # 集合 1: 高分检测
+                    mask_high = scores_final > high_conf
+                    dets_high = current_dets[mask_high]
+                    # 集合 2: 低分但定位准 (仅在 LGTrack 模式下真正有用，但先计算出来)
+                    if  cfg["use_fga"] == "True":
+                        # 确保输入数据有第6列(loc_score)，否则回退
+                        if current_dets.shape[1] > 6:
+                            scores_loc = current_dets[:, 6]
+                            mask_low_score = (scores_final < high_conf) & (scores_final > junk_conf)
+                            mask_loc_valid = scores_loc > loc_thresh
+                            dets_low_valid = current_dets[mask_low_score & mask_loc_valid]
+                        else:
+                            print("[Warning] Dets_2d missing Loc_Score column! Cannot use LGTrack logic.")
+                if cfg["use_fga"] == "True":
+                    # 融合模式：高分 + LGTrack挽救的低分
+                    if len(dets_high) > 0 and len(dets_low_valid) > 0:
+                        dets_2d_combined = np.concatenate((dets_high, dets_low_valid), axis=0)
+                    elif len(dets_high) > 0:
+                        dets_2d_combined = dets_high
+                    elif len(dets_low_valid) > 0:
+                        dets_2d_combined = dets_low_valid
+                    else:
+                        dets_2d_combined = np.empty((0, 7))
                 else:
-                    dets_2d_frame = []
+                    # 传统模式：仅大于high_conf 的检测
+                    dets_2d_combined = dets_high
+                    
+                dets_2d_input = dets_2d_combined
                 # -------------------- The fusion of 3D detections and 2D detections -------------
-                dets_3d_fusion, dets_3d_only, dets_2d_only = \
-                    data_fusion(dets_3d_camera, dets_2d_frame, dets_3dto2d_image, additional_info)
+                dets_3d_fusion, dets_3d_only, dets_2d_only_list = \
+                    data_fusion(dets_3d_camera, dets_2d_input, dets_3dto2d_image, additional_info)
 
-                dets_2d_only_tlwh = np.array([convert_x1y1x2y2_to_tlwh(i) for i in dets_2d_only])
+                dets_2d_high_tlwhc = []
+                dets_2d_low_tlwhc = []
+
+                if len(dets_2d_only_list) > 0:
+                    dets_2d_only_array = np.array(dets_2d_only_list) # 转回 numpy 方便操作
+                    
+                    # 再次利用 high_conf 进行拆分
+                    # 注意：dets_2d_only_array 每一行依然是 [frame, x1, y1, x2, y2, score, loc_score]
+                    scores = dets_2d_only_array[:, 5]
+                    
+                    # 拆分
+                    high_mask = scores >= high_conf
+                    # 低分框自然是那些分数低但依然存在于列表中的(说明它是合法的low_valid)
+                    low_mask = ~high_mask 
+                    
+                    raw_high = dets_2d_only_array[high_mask]
+                    raw_low = dets_2d_only_array[low_mask]
+
+                    # 转换为 TLWH 格式供 Tracker 使用
+                    if len(raw_high) > 0:
+                        dets_2d_high_tlwhc = np.array([convert_x1y1x2y2c_to_tlwhc(row[1:6]) for row in raw_high])
+                    if len(raw_low) > 0:
+                        dets_2d_low_tlwhc = np.array([convert_x1y1x2y2c_to_tlwhc(row[1:6]) for row in raw_low])
+                
+                # 转换为 numpy array 防止报错
+                if len(dets_2d_high_tlwhc) == 0: dets_2d_high_tlwhc = np.empty((0, 5))
+                if len(dets_2d_low_tlwhc) == 0: dets_2d_low_tlwhc = np.empty((0, 5))
+
 
                 start_time = time.time()
+                # 传统模式下dets_2d_low_tlwhc为空
                 trackers = tracker.update(dets_3d_fusion,
-                                          dets_2d_only_tlwh,
+                                          dets_2d_high_tlwhc,  # Stage 3.1 主力匹配
+                                          dets_2d_low_tlwhc,   # Stage 3.2 挽救匹配 (LGTrack)
                                           dets_3d_only,
                                           cfg,
                                           frame,
-                                          seq_id
-                                          )
+                                          seq_id)
+                # trackers为3D轨迹时，
+# [track.track_id_3d](3D轨迹为偶数，2D轨迹为奇数), bbox([h,w,l,x,y,z,rot_y]), track.additional_info(alpha + 3D检测器中的 type + 2D BBOX + score)
                 cycle_time = time.time() - start_time
                 total_time += cycle_time
                 total_frames += 1
@@ -86,11 +158,11 @@ def tracking(cfg):
 
 
 if __name__ == '__main__':
-    file_path = 'results'
-    try:
-        shutil.rmtree(file_path)
-    except OSError as e:
-        print("Error: %s - %s." % (e.filename, e.strerror))
+    # file_path = 'results'
+    # try:
+    #     shutil.rmtree(file_path)
+    # except OSError as e:
+    #     print("Error: %s - %s." % (e.filename, e.strerror))
 
     parser = argparse.ArgumentParser(description='DeepFusionMOT')
     parser.add_argument('--cfg', type=str, default='./config/kitti.yaml', help='data')
@@ -101,4 +173,4 @@ if __name__ == '__main__':
     combine_category_result(cfg)
 
     # print("--------------Starting Evaluation-------------")
-    results = eval_kitti()
+    results = eval_kitti(cfg)

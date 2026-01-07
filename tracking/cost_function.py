@@ -8,6 +8,113 @@ PI = np.pi
 TWO_PI = 2 * np.pi
 from typing import Tuple
 
+def ro_gdiou_3d(box_a, box_b, w1=0.5, w2=1.5):
+    """
+    Implementation of Ro_GDIoU proposed in MCTrack paper (Algorithm 1).
+    Combines Rotated IoU, GIoU penalty (shape), and DIoU penalty (distance).
+    
+    Input:
+        box_a, box_b: 3D bounding boxes [x, y, z, theta, l, w, h] (or object with .bbox/.pose)
+    Output:
+        Ro_GDIoU score (range approx [-2, 1] if w1=w2=1)
+    """
+    # 1. 数据格式统一化 (Handle inputs)
+    if not isinstance(box_b, list) and not isinstance(box_b, np.ndarray):
+        box_b = box_b.pose.tolist() # Assuming tracking object
+    else:
+        box_b = box_b
+        
+    if not isinstance(box_a, list) and not isinstance(box_a, np.ndarray):
+        box_a = box_a.bbox.tolist() # Assuming detection object
+    
+    # 2. 获取BEV平面的4个角点 (Get BEV corners)
+    # Reuse existing compute_bottom function which handles rotation
+    boxa_bot, boxb_bot = compute_bottom(box_a, box_b) 
+    
+    # 3. 计算相交面积 Intersection (I)
+    I_2D = compute_inter_2D(boxa_bot, boxb_bot)
+    
+    # 4. 计算两个框自身的面积 (Area A & Area B)
+    # box format: [x, y, z, theta, l, w, h] -> indices 4=l, 5=w
+    area_a = box_a[4] * box_a[5]
+    area_b = box_b[4] * box_b[5]
+    
+    # 5. 计算并集面积 Union (U)
+    U_2D = area_a + area_b - I_2D
+    
+    # 6. 计算 IoU (Ro_IoU)
+    # Prevent division by zero
+    iou = I_2D / (U_2D + 1e-6)
+    
+    # --- GIoU Term Calculation ---
+    # 7. 计算最小凸包面积 (C) - reusing convex_area function
+    # Note: convex_area returns the area of the convex hull
+    C_2D = convex_area(boxa_bot, boxb_bot)
+    
+    # GIoU penalty: (C - U) / C
+    if C_2D <= 0:
+        giou_penalty = 0
+    else:
+        giou_penalty = (C_2D - U_2D) / C_2D
+
+    # --- DIoU Term Calculation ---
+    # 8. 计算中心点欧氏距离 (c^2)
+    # box format: [x, y, z...] -> indices 0=x, 1=y
+    c2 = (box_a[0] - box_b[0])**2 + (box_a[1] - box_b[1])**2
+    
+    # 9. 计算最小外包矩形的对角线距离 (d^2)
+    # Combine all corners to find extent
+    all_corners = np.vstack((boxa_bot, boxb_bot))
+    x_min, y_min = np.min(all_corners, axis=0)
+    x_max, y_max = np.max(all_corners, axis=0)
+    
+    # Diagonal squared of the enclosing axis-aligned rectangle
+    d2 = (x_max - x_min)**2 + (y_max - y_min)**2
+    
+    # DIoU penalty: c^2 / d^2
+    if d2 <= 0:
+        diou_penalty = 0
+    else:
+        diou_penalty = c2 / d2
+        
+    # 10. Final Ro_GDIoU formula (Eq in Algorithm 1)
+    # Ro_GDIoU = Ro_IoU - w1 * ((C-U)/C) - w2 * (c^2/d^2)
+    ro_gdiou = iou - (w1 * giou_penalty) - (w2 * diou_penalty)
+    
+    return ro_gdiou
+
+def iou_2d_c(boxA, boxB, w = 0.0):
+    """
+    计算考虑置信度的 IoU 得分
+    boxA: [x1, y1, x2, y2, conf] (Detection)
+    boxB: [x1, y1, x2, y2, conf] (Track)
+    Return: IoU - abs(diff_conf)
+    """
+    # 1. 计算标准 IoU
+    # 注意：输入带有 conf，所以只取前4位计算坐标
+    coordsA = [int(x) for x in boxA[:4]]
+    coordsB = [int(x) for x in boxB[:4]]
+
+    xA = max(coordsA[0], coordsB[0])
+    yA = max(coordsA[1], coordsB[1])
+    xB = min(coordsA[2], coordsB[2])
+    yB = min(coordsA[3], coordsB[3])
+
+    interArea = max(0, xB - xA + 1) * max(0, yB - yA + 1)
+    boxAArea = (coordsA[2] - coordsA[0] + 1) * (coordsA[3] - coordsA[1] + 1)
+    boxBArea = (coordsB[2] - coordsB[0] + 1) * (coordsB[3] - coordsB[1] + 1)
+    
+    iou = interArea / float(boxAArea + boxBArea - interArea)
+
+    # 2. 计算置信度差异
+    conf_det = boxA[4]
+    conf_trk = boxB[4]
+    conf_diff = abs(conf_det - conf_trk)
+
+    # 3. 组合得分 (IoU 减去 置信度差异)
+    # 你可以在这里加权重，例如: iou - 0.5 * conf_diff
+    return iou - w * conf_diff
+
 def iou_2d(boxA, boxB):
     boxA = [int(x) for x in boxA]
     boxB = [int(x) for x in boxB]
@@ -196,9 +303,6 @@ def giou_3d(box_a, box_b, reactivate_track=None, metric='giou_3d'):
 def correct_new_angle_and_diff(current_angle: float, new_angle_to_correct: float) -> Tuple[float, float]:
     """ Return an angle equivalent to the new_angle_to_correct with regards to difference to the current_angle
     Calculate the difference between two angles [-PI/2, PI/2]
-
-    TODO: This can be refactored to just return the difference
-    and be compatible with all angle values without worrying about quadrants, but this works for now
     """
     abs_diff = normalize_angle(new_angle_to_correct) - normalize_angle(current_angle)
 
@@ -381,10 +485,10 @@ def convert_3dbox_to_8corner(bbox3d_input):
     w = bbox3d[5]
     h = bbox3d[6]
 
-    # 3d bounding box corners  这是什么东西
-    x_corners = [l / 2, l / 2, -l / 2, -l / 2, l / 2, l / 2, -l / 2, -l / 2];
-    y_corners = [0, 0, 0, 0, -h, -h, -h, -h];
-    z_corners = [w / 2, -w / 2, -w / 2, w / 2, w / 2, -w / 2, -w / 2, w / 2];
+    # 3d bounding box corners
+    x_corners = [l / 2, l / 2, -l / 2, -l / 2, l / 2, l / 2, -l / 2, -l / 2]
+    y_corners = [0, 0, 0, 0, -h, -h, -h, -h]
+    z_corners = [w / 2, -w / 2, -w / 2, w / 2, w / 2, -w / 2, -w / 2, w / 2]
 
     # rotate and translate 3d bounding box
     corners_3d = np.dot(R, np.vstack(

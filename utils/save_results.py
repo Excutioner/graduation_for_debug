@@ -13,11 +13,16 @@ def compute_color_for_id(label):
     return tuple(color)
 
 def save_results(trackers, cfg, seq_name, frame, category, image):
-    save_path = os.path.join(cfg.save_path, category, "data"); mkdir_if_inexistence(save_path)
+    save_path = os.path.join(cfg.root_path, "training", category, "data"); mkdir_if_inexistence(save_path)
+    # save_path = os.path.join(cfg.save_path, category, "data"); 
     save_name = os.path.join(save_path, seq_name + '.txt')
     f = open(save_name, 'a')
 
-    save_image_dir = os.path.join(cfg.save_path, category, "image", seq_name); mkdir_if_inexistence(save_image_dir)
+    # save_image_dir = os.path.join(cfg.save_path, category, "image", seq_name); 
+    save_image_dir = os.path.join(cfg.root_path, "training", category, "image", seq_name); 
+
+    if cfg.save_2d_image == "True":
+        mkdir_if_inexistence(save_image_dir)
 
     # -----------------下面的代码是为了用AB3DMOT的3D测评输出的------------
     save_path = os.path.dirname(save_path)
@@ -44,8 +49,9 @@ def save_results(trackers, cfg, seq_name, frame, category, image):
                             bbox3d_tmp[4], bbox3d_tmp[5], bbox3d_tmp[6], conf_tmp)
             f.write(str_to_srite)
             img_id = str(frame).zfill(6)
-            # show_image_with_boxes_3d(img_0, bbox3d_tmp, image_path, color, img0_name, label, calib_file_seq, line_thickness=1)
-            # show_image_with_boxes_2d(bbox3d, image, save_image_dir, color, img_id, label, line_thickness=2)
+            # show_image_with_boxes_3d(image, bbox3d_tmp, save_image_dir, color, img_id, label, calib_file_seq, line_thickness=1)
+            if cfg.save_2d_image == "True":
+                show_image_with_boxes_2d(bbox3d, image, save_image_dir, color, img_id, label, line_thickness=2)
             # save in detection format with track ID, can be used for dection evaluation and tracking visualization
 
             # -----------------下面的代码是为了用AB3DMOT的3D测评输出的------------

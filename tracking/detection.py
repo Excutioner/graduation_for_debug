@@ -5,14 +5,17 @@ import numpy as np
 
 
 class Detection_2D(object):
-    def __init__(self, tlwh):
+    def __init__(self, tlwhc):
         '''
         :param tlwh:  top_left x   top_left y    width   height
         :param additional_info:
         '''
-        self.tlwh = tlwh
+        self.tlwh = tlwhc[:4]
         # self.feature = np.asarray(feature, dtype=np.float32)
-
+        if len(tlwhc) > 4:
+            self.confidence = tlwhc[4]
+        else:
+            self.confidence = 0
     def to_x1y1x2y2(self):
         """Convert bounding box to format `(min x, min y, max x, max y)`, i.e.,
         `(top left, bottom right)`.
@@ -30,7 +33,12 @@ class Detection_2D(object):
         ret[:2] += ret[2:] / 2
         ret[2] /= ret[3]
         return ret
-
+    def get_confidence(self):
+        return self.confidence
+    
+    def to_x1y1x2y2c(self):
+        return np.append(self.to_x1y1x2y2(), self.confidence)
+    
 class Detection_3D_Fusion(object):
     def __init__(self, BBox_3D, additional_info):
         self.bbox = BBox_3D

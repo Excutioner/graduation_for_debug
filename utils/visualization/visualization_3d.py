@@ -53,7 +53,7 @@ def show_image_with_boxes_3d(img2, bbox3d_tmp, image_path, color, img0_name, lab
         c2 = c1[0] + t_size[0], c1[1] - t_size[1] - 3
         cv2.rectangle(img2, c1, c2, color, -1, cv2.LINE_AA)  # filled
         cv2.putText(img2, str(label), (c1[0], c1[1] - 2), 0, tl / 3, [225, 255, 255], thickness=tf, lineType=cv2.LINE_AA)
-    cv2.imwrite(image_path + "\\" + "{}.png".format(img0_name), img2)
+    cv2.imwrite(image_path + "/" + "{}.png".format(img0_name), img2)
 
     # img.save(save_path)
     # print('--')

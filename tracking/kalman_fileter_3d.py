@@ -39,7 +39,7 @@ class KalmanBoxTracker(object):
         self.kf.Q[7:, 7:] *= 0.01
         self.history = []
         self.still_first = True
-        self.kf.x[:7] = bbox3D.reshape((7, 1))   # [x,y,z,theta,l,w,h]
+        self.kf.x[:7] = bbox3D.reshape((7, 1))   # [x,y,z,ry,l,w,h]
         # return self.kf.x
         # return  [self.kf.x[0][0], self.kf.x[1][0], self.kf.x[2][0], self.kf.x[3][0], self.kf.x[4][0], self.kf.x[5][0], self.kf.x[6][0]]
         # self.info = info  # other info associated
@@ -52,24 +52,27 @@ class KalmanBoxTracker(object):
         # if self.still_first:
         #     self.first_continuing_hit += 1  # number of continuing hit in the fist time
         # ######################### orientation correction
-        if self.kf.x[3] >= np.pi: self.kf.x[3] -= np.pi * 2  # make the theta still in the range
+        if self.kf.x[3] >= np.pi: self.kf.x[3] -= np.pi * 2  # make the ry still in the range
         if self.kf.x[3] < -np.pi: self.kf.x[3] += np.pi * 2
 
-        new_theta = bbox3D[3]
-        if new_theta >= np.pi: new_theta -= np.pi * 2  # make the theta still in the range
-        if new_theta < -np.pi: new_theta += np.pi * 2
-        bbox3D[3] = new_theta
+        new_ry = bbox3D[3]
+        if new_ry >= np.pi: new_ry -= np.pi * 2  # make the ry still in the range
+        if new_ry < -np.pi: new_ry += np.pi * 2
+        bbox3D[3] = new_ry
 
-        predicted_theta = self.kf.x[3]
-        if abs(new_theta - predicted_theta) > np.pi / 2.0 and abs(
-                new_theta - predicted_theta) < np.pi * 3 / 2.0:  # if the angle of two theta is not acute angle
-            self.kf.x[3] += np.pi
-            if self.kf.x[3] > np.pi: self.kf.x[3] -= np.pi * 2  # make the theta still in the range
-            if self.kf.x[3] < -np.pi: self.kf.x[3] += np.pi * 2
-
+        predicted_ry = self.kf.x[3]
+        # 处理角度跳变问题
+        if abs(new_ry - predicted_ry) > np.pi / 2.0 and abs(new_ry - predicted_ry) < np.pi * 3 / 2.0:
+            bbox3D[3] += np.pi
+            if bbox3D[3] > np.pi: 
+                bbox3D[3] -= np.pi * 2
+            if bbox3D[3] < -np.pi: 
+                bbox3D[3] += np.pi * 2
+        new_ry = bbox3D[3]
+        
         # now the angle is acute: < 90 or > 270, convert the case of > 270 to < 90
-        if abs(new_theta - self.kf.x[3]) >= np.pi * 3 / 2.0:
-            if new_theta > 0:
+        if abs(new_ry - self.kf.x[3]) >= np.pi * 3 / 2.0:
+            if new_ry > 0:
                 self.kf.x[3] += np.pi * 2
             else:
                 self.kf.x[3] -= np.pi * 2
@@ -78,7 +81,7 @@ class KalmanBoxTracker(object):
 
         self.kf.update(bbox3D)
 
-        if self.kf.x[3] >= np.pi: self.kf.x[3] -= np.pi * 2  # make the theta still in the rage
+        if self.kf.x[3] >= np.pi: self.kf.x[3] -= np.pi * 2  # make the ry still in the rage
         if self.kf.x[3] < -np.pi: self.kf.x[3] += np.pi * 2
         # return self.kf.x
         # self.info = info

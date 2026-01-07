@@ -42,8 +42,6 @@ class Calibration(object):
         right x, down y, front z
 
         Ref (KITTI paper): http://www.cvlibs.net/publications/Geiger2013IJRR.pdf
-
-        TODO(rqi): do matrix multiplication only once for each projection.
     '''
 
     def __init__(self, calib_filepath):

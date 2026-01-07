@@ -64,12 +64,14 @@ def safe_path(input_path, warning=True, debug=True):
 
 
 def combine_category_result(cfg):
-    root_dir = 'results/KITTI'
+    # root_dir = cfg.combine_root_dir
+    root_dir = os.path.join(cfg.root_path, "training")
     seq_list = ['%04d' % tmp for tmp in range(0, len(cfg.tracking_seqs))]
     cat_lists = cfg.cat_list
 
     # save path
-    save_dir = cfg.eval_save_path
+    # save_dir = cfg.eval_save_path
+    save_dir = os.path.join(cfg.root_path, "data", "training")
     mkdir_if_inexistence(save_dir)
 
     # merge

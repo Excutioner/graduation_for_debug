@@ -8,81 +8,75 @@ PI = np.pi
 TWO_PI = 2 * np.pi
 from typing import Tuple
 
-def ro_gdiou_3d(box_a, box_b, w1=0.5, w2=1.5):
+def ro_gdiou_3d(box_a, box_b, w1=0.5, w2=1.5, depth_weight=1.0):
     """
-    Implementation of Ro_GDIoU proposed in MCTrack paper (Algorithm 1).
-    Combines Rotated IoU, GIoU penalty (shape), and DIoU penalty (distance).
-    
+    [Fixed & Improved] Ro_GDIoU with Anisotropic Weighting
     Input:
-        box_a, box_b: 3D bounding boxes [x, y, z, theta, l, w, h] (or object with .bbox/.pose)
-    Output:
-        Ro_GDIoU score (range approx [-2, 1] if w1=w2=1)
+        box_a, box_b: [x, y, z, theta, l, w, h]
+        depth_weight: Weight for z-axis (depth) distance penalty. 
+                      < 1.0 makes it tolerant to depth estimation errors.
     """
-    # 1. 数据格式统一化 (Handle inputs)
+    # 1. 数据格式统一化
     if not isinstance(box_b, list) and not isinstance(box_b, np.ndarray):
-        box_b = box_b.pose.tolist() # Assuming tracking object
+        box_b = box_b.pose.tolist() 
     else:
         box_b = box_b
         
     if not isinstance(box_a, list) and not isinstance(box_a, np.ndarray):
-        box_a = box_a.bbox.tolist() # Assuming detection object
+        box_a = box_a.bbox.tolist() 
     
-    # 2. 获取BEV平面的4个角点 (Get BEV corners)
-    # Reuse existing compute_bottom function which handles rotation
+    # 2. 获取BEV平面的4个角点 (x, z)
+    # compute_bottom 内部取的是 [0, 2] 列，即 x 和 z，这是正确的 BEV 平面
     boxa_bot, boxb_bot = compute_bottom(box_a, box_b) 
     
-    # 3. 计算相交面积 Intersection (I)
+    # 3-6. 计算 IoU (保持不变，基于 BEV 面积)
     I_2D = compute_inter_2D(boxa_bot, boxb_bot)
-    
-    # 4. 计算两个框自身的面积 (Area A & Area B)
-    # box format: [x, y, z, theta, l, w, h] -> indices 4=l, 5=w
     area_a = box_a[4] * box_a[5]
     area_b = box_b[4] * box_b[5]
-    
-    # 5. 计算并集面积 Union (U)
     U_2D = area_a + area_b - I_2D
-    
-    # 6. 计算 IoU (Ro_IoU)
-    # Prevent division by zero
     iou = I_2D / (U_2D + 1e-6)
     
-    # --- GIoU Term Calculation ---
-    # 7. 计算最小凸包面积 (C) - reusing convex_area function
-    # Note: convex_area returns the area of the convex hull
+    # --- GIoU Term ---
+    # 7. 计算最小凸包面积 (保持不变，基于 BEV)
     C_2D = convex_area(boxa_bot, boxb_bot)
-    
-    # GIoU penalty: (C - U) / C
     if C_2D <= 0:
         giou_penalty = 0
     else:
         giou_penalty = (C_2D - U_2D) / C_2D
 
-    # --- DIoU Term Calculation ---
-    # 8. 计算中心点欧氏距离 (c^2)
-    # box format: [x, y, z...] -> indices 0=x, 1=y
-    c2 = (box_a[0] - box_b[0])**2 + (box_a[1] - box_b[1])**2
+    # --- DIoU Term (Critical Fix) ---
+    # 8. [修正] 计算中心点距离
+    # 必须使用 x (idx 0) 和 z (idx 2) 来以此匹配 BEV 平面
+    # 同时加入 depth_weight 实现各向异性微创新
+    
+    dx = box_a[0] - box_b[0] # Lateral error
+    dz = box_a[2] - box_b[2] # Longitudinal/Depth error (Rect系下是 z 轴)
+    
+    # c2 = dx^2 + weighted * dz^2
+    # 注意：y轴 (高度) 差异通常在 BEV metric 中被忽略，或者你可以加上 (box_a[1]-box_b[1])**2
+    # 但为了和 d2 (从 compute_bottom 算出的 BEV 对角线) 保持量纲一致，这里只用 x 和 z
+    c2 = (dx ** 2) + (depth_weight * (dz ** 2))
     
     # 9. 计算最小外包矩形的对角线距离 (d^2)
-    # Combine all corners to find extent
+    # all_corners 来自 boxa_bot，它已经是 (N, 2) 的数组，列分别是 x 和 z
     all_corners = np.vstack((boxa_bot, boxb_bot))
-    x_min, y_min = np.min(all_corners, axis=0)
-    x_max, y_max = np.max(all_corners, axis=0)
     
-    # Diagonal squared of the enclosing axis-aligned rectangle
-    d2 = (x_max - x_min)**2 + (y_max - y_min)**2
+    x_min, z_min = np.min(all_corners, axis=0) # 注意这里第二维是 z
+    x_max, z_max = np.max(all_corners, axis=0)
     
-    # DIoU penalty: c^2 / d^2
+    # BEV 外包框对角线
+    d2 = (x_max - x_min)**2 + (z_max - z_min)**2
+    
+    # DIoU penalty
     if d2 <= 0:
         diou_penalty = 0
     else:
         diou_penalty = c2 / d2
         
-    # 10. Final Ro_GDIoU formula (Eq in Algorithm 1)
-    # Ro_GDIoU = Ro_IoU - w1 * ((C-U)/C) - w2 * (c^2/d^2)
+    # 10. Final Score
     ro_gdiou = iou - (w1 * giou_penalty) - (w2 * diou_penalty)
     
     return ro_gdiou
-
 def iou_2d_c(boxA, boxB, w = 0.0):
     """
     计算考虑置信度的 IoU 得分

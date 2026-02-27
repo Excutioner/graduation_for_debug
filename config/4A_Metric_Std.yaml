@@ -1,0 +1,85 @@
+dataset: 'kitti'
+dataset_path: '/datav/DeepFusionMOT/data/kitti'
+spilt: 'training'
+
+root_path: 'ablation_results/4A_Metric_Std/KITTI'
+dets_path_3d: "data/detections/3D"
+dets_path_2d: "data/detections/2D"
+save_2d_image: "False"
+
+if_cmc: "True"
+ex_cfg: "cmc_no_ex_yolox/training/image_02/"
+kfstate_2d: "ltrb"
+
+motion_model: "CTRA"
+cmc_with_rect2imu : "True"
+
+tracking_seqs: [0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20]
+
+detector_2d: 'yolox'
+detector_3d: 'virconv'
+
+cat_list: ['Car']
+
+use_fga: "False"
+remain_threshold_2d: 1
+
+Car:
+  max_ages: 25
+  min_frames: 4
+  metric_3d: ro_gdiou_3d
+  metric_2d: iou_2d
+  cost_function:
+      iou_2d: 0.55
+      iou_2d_c: 0.55
+      sdiou_2d: 1.1
+      giou_3d: -0.2
+      iou_3d: 0.01
+      dist_3d: 1.1
+      ro_gdiou_3d: -0.25
+  cost_options:
+    iou_2d_c:
+      w: 0.4
+    ro_gdiou_3d:
+      w1: 0.5
+      w2: 1.5
+      depth_weight: 1.0
+  fga:
+    junk_conf: 0.2
+    high_conf: 0.4
+    loc_thresh:  0.65
+  
+  use_rv_match: "False"
+  rv_metric: sdiou_2d
+  rv_threshold: 0.5
+
+  micro_innovation:
+    use_cg_akf: true
+    cg_akf_params:
+      alpha: 5.0
+    use_cg_akf_2d: true
+    cg_akf_2d_params:
+      alpha: 3.0
+    use_dist_aware: false
+    dist_aware_params:
+      far_dist_thresh: 45.0
+      far_iou_thresh: 0.25
+    use_apn_ctra: true
+    apn_ctra_params:
+      maneuver_factor_omega: 2.0
+      maneuver_factor_accel: 0.5
+    use_aw_ro_gdiou: false
+    aw_ro_gdiou_params:
+      depth_weight: 0.3
+
+Pedestrian:
+  metric_3d: iou_3d
+  metric_2d: iou_2d
+  max_ages: 25
+  min_frames: 3
+  cost_function:
+      iou_2d: 0.55
+      sdiou_2d: 0.2
+      giou_3d: -0.2
+      iou_3d: 0.01
+      dist_3d: 1.1

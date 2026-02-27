@@ -1,23 +1,18 @@
 dataset: 'kitti'
 
 dataset_path: '/datav/DeepFusionMOT/data/kitti'
-spilt: 'testing'
+spilt: 'training'
 
 
-#----------------------------Detector--------------------------
-# detector_2d: 'rrc'
-# detector_2d: 'yolox'
-detector_2d: 'yolox_my'
-# detector_2d: 'yolox_1280_optimized'
-# detector_2d: 'yolox_apollo_kitti_1280'
-# detector_2d: 'yolox_apollo_l4_1280'
-# detector_2d: 'yolox_withtruck'
-# detector_3d: 'pointrcnn'
-detector_3d: 'virconv'
-# detector_3d: 'casa'
+# 实验命名解析：
+# iou阈值_检测器_是否启用CMC(是否去除检测内点)_是否启用LTRB_QPR是否优化
+# _3D轨迹的运动补偿中补偿的旋转角delta是否包含从rect到IMU，IMU又转换回rect的部分
+# _卡尔曼滤波器update中车头车尾不分时以轨迹还是检测为准
 
-# 3B_Env_CMC_CV_yolox_1280_optimized_withrect_withex_ltrb
-root_path: 'chapter4_end_test/KITTI'
+# !!!!!!!!!!!!!!!使用ltrbc时不要忘记将metric_2d设为iou_2d_c
+
+#------------------------ Root path define ----------------------
+root_path: '3B_Motion_CTRA_yolox_my/KITTI'
 # save_path: '0.55_3dvc2dx1280_noexcmc_ltrbc_70c_r2i_apollokitti_cv_c40_hits4/KITTI/training'
 # eval_save_path: '0.55_3dvc2dx1280_noexcmc_ltrbc_70c_r2i_apollokitti_cv_c40_hits4/KITTI/data/training'
 dets_path_3d: "data/detections/3D"
@@ -27,29 +22,36 @@ dets_path_2d: "data/detections/2D"
 save_2d_image: "False"
 # ------------------------CMC--------------------------
 if_cmc: "False"
-# ex_cfg: "cmc_no_ex_yolox/training/image_02/"
-# ex_cfg: "cmc_no_ex_trad/training/image_02/"
-# ex_cfg: "cmc_with_ex_yolox_withtruck/training/image_02/"
-# ex_cfg: "cmc_with_ex_yolox_1280_optimized/training/image_02/"
-ex_cfg: "cmc_with_ex_yolox_apollo_kitti_1280/training/image_02/"
-# ex_cfg: "cmc_with_ex_yolox_apollo_kitti_1280_past/training/image_02/"
-# ex_cfg: "cmc_with_ex_yolox_apollo_l4_1280/training/image_02/"
-# ex_cfg: "cmc_with_ex_yolox_my/training/image_02/"
-
+ex_cfg: "cmc_no_ex_yolox/training/image_02/"
+# ex_cfg: "cmc_with_ex_yolox/training/image_02/"
 kfstate_2d: "xyah"
 
 #------------------------Motion model--------------------------
-motion_model: "CV"
+motion_model: "CTRA"
 # r2i默认为True，效果更好
-cmc_with_rect2imu : "False"
+cmc_with_rect2imu : "True"
 
 #------------------------Dataset spilt--------------------------
-tracking_seqs: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28]
-# tracking_seqs: [0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20]
+#tracking_seqs: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28]
+tracking_seqs: [0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20]
+
+
+#----------------------------Detector--------------------------
+# detector_2d: 'rrc'
+# detector_2d: 'yolox'
+detector_2d: 'yolox_my'
+# detector_3d: 'pointrcnn'
+detector_3d: 'virconv'
+# detector_3d: 'casa'
+
+
+
 
 #----------------------------Category--------------------------
 #cat_list: ['Car', 'Pedestrian']
 cat_list: ['Car']
+
+
 #----------------------------Hyperparameter--------------------------
 #If you want a better result, re-adjust the following hyperparameter
 use_fga: "False"
@@ -87,7 +89,6 @@ Car:
     # 跟踪时只使用置信度大于high_conf的检测结果
     junk_conf: 0.2
     high_conf: 0.4
-    # high_conf: 0.1
     loc_thresh:  0.65
   # MCTrack 原有配置
   use_rv_match: "False"      # 是否开启MCTrack的RV二阶段匹配
@@ -98,14 +99,13 @@ Car:
     # 创新点1: 置信度引导的自适应卡尔曼滤波 (CG-AKF)
     use_cg_akf: false
     cg_akf_params:
-      mu: 1.0  # 阈值
-      tau: 1.0 # 灵敏调节，越大膨胀噪声越少
+      alpha: 5.0  # 调节系数: exp(5 * (1 - score))
     # --- [新增] 2D CG-AKF 配置 ---
     use_cg_akf_2d: false    # 2D 独立开关
     cg_akf_2d_params:
-      mu: 3.0           # 2D 建议值 3.0 (2D框本身较抖，惩罚不宜过大)
-      tau: 1.0
-    # 创新点2: 距离感知的各向异性匹配 (Distance-Aware Matching)
+      alpha: 3.0           # 2D 建议值 3.0 (2D框本身较抖，惩罚不宜过大)
+
+      # 创新点2: 距离感知的各向异性匹配 (Distance-Aware Matching)
     use_dist_aware: false
     dist_aware_params:
       far_dist_thresh: 45.0 # 超过45米视为远距离
@@ -113,8 +113,8 @@ Car:
     # 3. [新增] 自适应过程噪声 CTRA (APN-CTRA)
     use_apn_ctra: false
     apn_ctra_params:
-      maneuver_factor_omega: 80.0  # 角速度影响因子
-      maneuver_factor_accel: 5.0  # 加速度影响因子
+      maneuver_factor_omega: 2.0  # 角速度影响因子
+      maneuver_factor_accel: 0.5  # 加速度影响因子
     # 4. [新增] 各向异性加权 Ro-GDIoU (AW-Ro-GDIoU)
     use_aw_ro_gdiou: false
     aw_ro_gdiou_params:

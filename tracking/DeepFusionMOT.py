@@ -5,7 +5,7 @@ import os
 import numpy as np
 from tracking.detection import Detection_3D_Fusion, Detection_3D_only, Detection_2D
 from tracking.tracker import Tracker
-from utils.kitti_oxts import load_oxts
+from utils.kitti_oxts import load_oxts, load_poses_matrix
 from utils.cmcs import load_cmcs
 
 class DeepFusionMOT():

@@ -4,8 +4,20 @@ import shutil
 import time
 from os.path import join
 
+# 限制底层库的并行线程数
+os.environ["OMP_NUM_THREADS"] = "1"
+os.environ["MKL_NUM_THREADS"] = "1"
+os.environ["OPENBLAS_NUM_THREADS"] = "1"
+os.environ["VECLIB_MAXIMUM_THREADS"] = "1"
+os.environ["NUMEXPR_NUM_THREADS"] = "1"
+
 import cv2
+cv2.setNumThreads(0) # 禁止 OpenCV 多线程
+cv2.ocl.setUseOpenCL(False) # 禁止 OpenCL
 import numpy as np
+
+# 在 import cv2 附近添加
+from nuscenes.nuscenes import NuScenes
 
 from datasets.coordinate_transformation import convert_x1y1x2y2c_to_tlwhc
 from datasets.coordinate_transformation import convert_x1y1x2y2_to_tlwh
@@ -28,21 +40,65 @@ def tracking(cfg):
     spilt = cfg.spilt
     seq_list = cfg.tracking_seqs
     total_time, total_frames = 0, 0
+    
+    # --- [新增] 初始化 nuScenes (如果是 nuScenes 数据集) ---
+    nusc = None
+    if cfg.dataset == 'nuscenes':
+        # 假设 cfg.dataset_path 指向 nuScenes 的 root (如 /datav/.../nuscenes/test)
+        # version 根据你的实际情况填写，通常是 'v1.0-test' 或 'v1.0-trainval'
+        nusc = NuScenes(version='v1.0-test', dataroot=cfg.dataset_path, verbose=False)
+        print("NuScenes initialized for image loading.")
+    # -----------------------------------------------------
 
     for category in cfg.cat_list:
         junk_conf = cfg[category]["fga"]["junk_conf"]
         high_conf = cfg[category]["fga"]["high_conf"]
         loc_thresh = cfg[category]["fga"]["loc_thresh"] # LGTrack 新增参数
         for seq_id in tqdm.trange(len(seq_list)):
+        # for seq_id in tqdm.trange(seq_list):
             # ----------------------------- Initialize tracker -------------------------
             tracker = DeepFusionMOT(cfg, category)
             seq_name = str(seq_id).zfill(4)
             dets_path_3d = os.path.join(cfg.dets_path_3d, cfg.detector_3d, spilt, category) + "/" + str(seq_id).zfill(4) + '.txt'
             dets_path_2d = os.path.join(cfg.dets_path_2d, cfg.detector_2d, spilt, category) + "/" + str(seq_id).zfill(4) + '.txt'
-            image_02_path = os.path.join(cfg.dataset_path, spilt, 'image_02') + "/" + str(seq_id).zfill(4)
-            filenames = os.listdir(image_02_path)
-            sorted_filenames = sorted(filenames)
-            image_filenames = [join(image_02_path, x) for x in sorted_filenames]
+            
+            if cfg.dataset == 'nuscenes':
+                # 1. 找到对应的 Scene
+                # 注意：假设你的 seq_id 是 614，对应的 scene name 是 'scene-0614'
+                # 如果你的 seq_list 里面已经是 [614, ...]，则需要拼接 'scene-'
+                target_scene_name = f"scene-{str(seq_id).zfill(4)}"
+                
+                # 在 nusc.scene 中查找
+                try:
+                    scene = next(s for s in nusc.scene if s['name'] == target_scene_name)
+                except StopIteration:
+                    print(f"[Error] Scene {target_scene_name} not found in nuScenes!")
+                    continue
+
+                # 2. 遍历该 Scene 的所有 Sample 获取 CAM_FRONT 的路径
+                image_filenames = []
+                current_token = scene['first_sample_token']
+                while current_token:
+                    sample = nusc.get('sample', current_token)
+                    cam_token = sample['data']['CAM_FRONT'] # 默认使用前视相机
+                    cam_data = nusc.get('sample_data', cam_token)
+                    
+                    # 获取绝对路径
+                    img_path = os.path.join(nusc.dataroot, cam_data['filename'])
+                    image_filenames.append(img_path)
+                    
+                    current_token = sample['next']
+            else:
+                # [原有逻辑] KITTI 格式
+                image_02_path = os.path.join(cfg.dataset_path, spilt, 'image_02') + "/" + str(seq_id).zfill(4)
+                if os.path.exists(image_02_path):
+                    filenames = os.listdir(image_02_path)
+                    sorted_filenames = sorted(filenames)
+                    image_filenames = [join(image_02_path, x) for x in sorted_filenames]
+                else:
+                    image_filenames = []
+                    print(f"[Warning] Image path not found: {image_02_path}")
+            
             # print(image_filenames)
             dets_3d = np.loadtxt(dets_path_3d, delimiter=',')  # load 3D detections, N x 15
             dets_2d = np.loadtxt(dets_path_2d, delimiter=',')
@@ -173,4 +229,4 @@ if __name__ == '__main__':
     combine_category_result(cfg)
 
     # print("--------------Starting Evaluation-------------")
-    results = eval_kitti(cfg)
+    # results = eval_kitti(cfg)

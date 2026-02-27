@@ -1,15 +1,15 @@
 dataset: 'kitti'
 
 dataset_path: '/datav/DeepFusionMOT/data/kitti'
-spilt: 'testing'
+spilt: 'training'
 
 
 #----------------------------Detector--------------------------
 # detector_2d: 'rrc'
 # detector_2d: 'yolox'
-detector_2d: 'yolox_my'
+# detector_2d: 'yolox_my'
 # detector_2d: 'yolox_1280_optimized'
-# detector_2d: 'yolox_apollo_kitti_1280'
+detector_2d: 'yolox_apollo_kitti_1280'
 # detector_2d: 'yolox_apollo_l4_1280'
 # detector_2d: 'yolox_withtruck'
 # detector_3d: 'pointrcnn'
@@ -17,7 +17,7 @@ detector_3d: 'virconv'
 # detector_3d: 'casa'
 
 # 3B_Env_CMC_CV_yolox_1280_optimized_withrect_withex_ltrb
-root_path: 'chapter4_end_test/KITTI'
+root_path: 'chapter3_end_awrogdiou35f_30/KITTI'
 # save_path: '0.55_3dvc2dx1280_noexcmc_ltrbc_70c_r2i_apollokitti_cv_c40_hits4/KITTI/training'
 # eval_save_path: '0.55_3dvc2dx1280_noexcmc_ltrbc_70c_r2i_apollokitti_cv_c40_hits4/KITTI/data/training'
 dets_path_3d: "data/detections/3D"
@@ -26,7 +26,7 @@ dets_path_2d: "data/detections/2D"
 # eval_root_dir: '0.55_3dvc2dx1280_noexcmc_ltrbc_70c_r2i_apollokitti_cv_c40_hits4/KITTI/training'
 save_2d_image: "False"
 # ------------------------CMC--------------------------
-if_cmc: "False"
+if_cmc: "True"
 # ex_cfg: "cmc_no_ex_yolox/training/image_02/"
 # ex_cfg: "cmc_no_ex_trad/training/image_02/"
 # ex_cfg: "cmc_with_ex_yolox_withtruck/training/image_02/"
@@ -41,11 +41,11 @@ kfstate_2d: "xyah"
 #------------------------Motion model--------------------------
 motion_model: "CV"
 # r2i默认为True，效果更好
-cmc_with_rect2imu : "False"
+cmc_with_rect2imu : "True"
 
 #------------------------Dataset spilt--------------------------
-tracking_seqs: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28]
-# tracking_seqs: [0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20]
+#tracking_seqs: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28]
+tracking_seqs: [0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20]
 
 #----------------------------Category--------------------------
 #cat_list: ['Car', 'Pedestrian']
@@ -57,8 +57,8 @@ remain_threshold_2d: 1
 Car:
   max_ages: 25
   min_frames: 4
-  metric_3d: iou_3d
-  # metric_3d: ro_gdiou_3d
+  # metric_3d: iou_3d
+  metric_3d: ro_gdiou_3d
   metric_2d: iou_2d
   # metric_2d: iou_2d_c
   cost_function:
@@ -69,14 +69,13 @@ Car:
       # iou_3d: 0.1
       iou_3d: 0.01
       dist_3d: 1.1
-      ro_gdiou_3d: -0.25
+      ro_gdiou_3d: -0.35
   cost_options:
     iou_2d_c:
       w: 0.4
     ro_gdiou_3d:
       w1: 0.5
       w2: 1.5
-      depth_weight: 1.0 # 默认是各向同性 (1.0)
   fga:
     # FGA模式下
     # 跟踪时只使用置信度大于junk_conf的检测结果
@@ -109,14 +108,14 @@ Car:
     use_dist_aware: false
     dist_aware_params:
       far_dist_thresh: 45.0 # 超过45米视为远距离
-      far_iou_thresh: 0.25  # 远距离放宽IoU阈值 (解决深度抖动导致IoU过低的问题)
+      far_iou_thresh: 0.001  # 远距离放宽IoU阈值 (解决深度抖动导致IoU过低的问题)
     # 3. [新增] 自适应过程噪声 CTRA (APN-CTRA)
     use_apn_ctra: false
     apn_ctra_params:
       maneuver_factor_omega: 80.0  # 角速度影响因子
       maneuver_factor_accel: 5.0  # 加速度影响因子
     # 4. [新增] 各向异性加权 Ro-GDIoU (AW-Ro-GDIoU)
-    use_aw_ro_gdiou: false
+    use_aw_ro_gdiou: true
     aw_ro_gdiou_params:
       depth_weight: 0.3  # 纵向(深度)惩罚权重，<1.0 表示容忍深度误差
 

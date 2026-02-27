@@ -71,7 +71,8 @@ def combine_category_result(cfg):
 
     # save path
     # save_dir = cfg.eval_save_path
-    save_dir = os.path.join(cfg.root_path, "data", "training")
+    # save_dir = os.path.join(cfg.root_path, "data", "training")
+    save_dir = os.path.join(cfg.root_path, "data", "testing")
     mkdir_if_inexistence(save_dir)
 
     # merge

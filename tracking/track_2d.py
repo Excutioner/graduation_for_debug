@@ -79,20 +79,37 @@ class Track_2D:
         self.mean, self.covariance = kf.predict(x1y1x2y2_mean, self.covariance)
         self.increment()
         
-    def update_2d(self, kf, detection):
-        self.mean, self.covariance = kf.update(self.mean, self.covariance, detection.to_xyah())
-        # self.features.append(detection.feature)
+    def update_2d(self, kf, detection, cg_akf_cfg=None):
+        # [新增] 计算自适应因子
+        r_factor = self._get_cg_akf_factor(detection, cg_akf_cfg)
+        
+        self.mean, self.covariance = kf.update(
+            self.mean, 
+            self.covariance, 
+            detection.to_xyah(),
+            confidence_factor=r_factor
+        )
+        
         self.hits += 1
-        # self.age += 1
         self.time_since_update = 0
         if self.state == TrackState.Tentative and self.hits >= self.n_init:
             self.state = TrackState.Confirmed
         if self.state == TrackState.Reactivate:
             self.state = TrackState.Confirmed
             
-    def ltbr_update_2d(self, kf, detection):
+    def ltbr_update_2d(self, kf, detection, cg_akf_cfg=None):
         x1y1x2y2_mean = np.concatenate([self.to_x1y1x2y2(), self.mean[4:]])
-        self.mean, self.covariance = kf.update(x1y1x2y2_mean, self.covariance, detection.to_x1y1x2y2())
+        
+        # [新增] 计算自适应因子
+        r_factor = self._get_cg_akf_factor(detection, cg_akf_cfg)
+        
+        # [新增] 将 factor 传入 update
+        self.mean, self.covariance = kf.update(
+            x1y1x2y2_mean, 
+            self.covariance, 
+            detection.to_x1y1x2y2(),
+            confidence_factor=r_factor # 传入因子
+        )
         # self.features.append(detection.feature)
         self.hits += 1
         # self.age += 1
@@ -101,13 +118,21 @@ class Track_2D:
             self.state = TrackState.Confirmed
         if self.state == TrackState.Reactivate:
             self.state = TrackState.Confirmed
-    def ltbrc_update_2d(self, kf, detection):
+    def ltbrc_update_2d(self, kf, detection, cg_akf_cfg=None):
         x1y1x2y2_mean = np.concatenate([self.to_x1y1x2y2(), self.mean[4:]])
         detection_measure = np.append(detection.to_x1y1x2y2(), detection.get_confidence())
-        self.mean, self.covariance = kf.update(x1y1x2y2_mean, self.covariance, detection_measure)
-        # self.features.append(detection.feature)
+        
+        # [新增] 计算自适应因子
+        r_factor = self._get_cg_akf_factor(detection, cg_akf_cfg)
+        
+        self.mean, self.covariance = kf.update(
+            x1y1x2y2_mean, 
+            self.covariance, 
+            detection_measure,
+            confidence_factor=r_factor # 传入因子
+        )
+        
         self.hits += 1
-        # self.age += 1
         self.time_since_update = 0
         if self.state == TrackState.Tentative and self.hits >= self.n_init:
             self.state = TrackState.Confirmed
@@ -158,6 +183,27 @@ class Track_2D:
         # 使用标准的协方差更新公式: P = J * P * J^T
         old_covariance = self.covariance.copy()
         self.covariance = J @ old_covariance @ J.T
+        
+    def _get_cg_akf_factor(self, detection, cg_akf_cfg):
+        if cg_akf_cfg and cg_akf_cfg.get('use_cg_akf_2d', False):
+            # 获取 2D 置信度
+            score = detection.get_confidence() if hasattr(detection, 'get_confidence') else 0.5
+            
+            # --- 修改开始: 获取新参数 mu 和 tau ---
+            params = cg_akf_cfg.get('cg_akf_2d_params', {})
+            mu = params.get('mu', 1.0)
+            tau = params.get('tau', 1.0)
+            
+            # --- 修改开始: 计算 Logits ---
+            score_clamped = np.clip(score, 1e-6, 1.0 - 1e-6)
+            logit = np.log(score_clamped / (1.0 - score_clamped))
+            
+            # --- 修改开始: 应用论文公式 ---
+            factor = 1.0 + np.exp((mu - logit) / tau)
+            return factor
+            # --- 修改结束 ---
+            
+        return 1.0 # 默认不改变
         
     def ego_motion_compensation_2d_imu(self, frame, calib_file, oxts):
         """

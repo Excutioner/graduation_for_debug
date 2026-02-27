@@ -17,7 +17,7 @@ detector_3d: 'virconv'
 # detector_3d: 'casa'
 
 # 3B_Env_CMC_CV_yolox_1280_optimized_withrect_withex_ltrb
-root_path: 'chapter4_end_test/KITTI'
+root_path: 'chapter4_end/KITTI'
 # save_path: '0.55_3dvc2dx1280_noexcmc_ltrbc_70c_r2i_apollokitti_cv_c40_hits4/KITTI/training'
 # eval_save_path: '0.55_3dvc2dx1280_noexcmc_ltrbc_70c_r2i_apollokitti_cv_c40_hits4/KITTI/data/training'
 dets_path_3d: "data/detections/3D"

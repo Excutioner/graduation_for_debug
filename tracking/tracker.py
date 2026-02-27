@@ -2,12 +2,13 @@
 # Emial: 1393196999@qq.com
 
 import numpy as np
-from scipy.optimize import linear_assignment 
 from tracking.cost_function import iou_2d, sdiou_2d 
 
-from tracking.matching import associate_dets_to_trks_fusion, associate_2D_to_3D_tracking
+from tracking.matching import associate_dets_to_trks_fusion, associate_2D_to_3D_tracking, linear_assignment
 from tracking.track_2d import Track_2D
 from tracking.track_3d import Track_3D
+
+DELETE_2D = True
 
 class Tracker():
     def __init__(self, cfg, category):
@@ -35,6 +36,43 @@ class Tracker():
         self.rv_metric = cfg[category].get('rv_metric', 'sdiou_2d')
         self.rv_threshold = cfg[category].get('rv_threshold', 0.5)
         
+        # [微创新配置读取]
+        self.micro_cfg = self.cfg[category].get('micro_innovation', {})
+        self.cg_akf_cfg = {
+            'use_cg_akf': self.micro_cfg.get('use_cg_akf', False),
+            # 原参数 {'alpha': 5.0} 修改为论文推荐的 mu=1.0, tau=1.0
+            'cg_akf_params': self.micro_cfg.get('cg_akf_params', {'mu': 1.0, 'tau': 1.0})
+        }
+        self.dist_aware_cfg = {
+            'use_dist_aware': self.micro_cfg.get('use_dist_aware', False),
+            'dist_aware_params': self.micro_cfg.get('dist_aware_params', {'far_dist_thresh': 45.0, 'far_iou_thresh': 0.25})
+        }
+        
+        # [新增] 2D CG-AKF 独立配置
+        self.cg_akf_2d_cfg = {
+            'use_cg_akf_2d': self.micro_cfg.get('use_cg_akf_2d', False),
+            # 2D 部分参数可视情况调整，这里保持结构一致
+            'cg_akf_2d_params': self.micro_cfg.get('cg_akf_2d_params', {'mu': 1.0, 'tau': 1.0})
+        }
+        
+        # 3. [新增] APN-CTRA (自适应过程噪声)
+        self.apn_ctra_cfg = {
+            'use_apn_ctra': self.micro_cfg.get('use_apn_ctra', False),
+            'apn_params': self.micro_cfg.get('apn_ctra_params', {'maneuver_factor_omega': 2.0, 'maneuver_factor_accel': 0.5})
+        }
+        # 4. [新增] AW-Ro-GDIoU (各向异性代价)
+        # 逻辑：如果开关开启，则修改 self.ro_gdiou_params 中的 depth_weight
+        # 如果开关关闭，强制设为 1.0 (各向同性)
+        use_aw = self.micro_cfg.get('use_aw_ro_gdiou', False)
+        aw_params = self.micro_cfg.get('aw_ro_gdiou_params', {'depth_weight': 0.3})
+        
+        if use_aw:
+            # 覆盖/添加 depth_weight
+            self.ro_gdiou_params['depth_weight'] = aw_params.get('depth_weight', 0.3)
+        else:
+            # 强制为默认值
+            self.ro_gdiou_params['depth_weight'] = 1.0
+            
         if self.kfstate_2d == "ltrb":
             from tracking import kalman_filter_2d_ltrb
             self.kf_2d = kalman_filter_2d_ltrb.KalmanFilter()
@@ -53,8 +91,10 @@ class Tracker():
             from tracking.extend_kalman_fileter_3d_ctrv import KalmanBoxTracker
         elif self.motion_model == "CV":
             from tracking.kalman_fileter_3d import  KalmanBoxTracker
+        elif self.motion_model == "CA":  # [新增] CA 模型支持
+            from tracking.kalman_filter_3d_ca import KalmanBoxTracker
         else :
-            raise ValueError("motion_model must be CTRA、CTRV or CV")
+            raise ValueError("motion_model must be CTRA、CA、CTRV or CV")
         self.KalmanBoxTracker_Class = KalmanBoxTracker
     def project_track_to_2d(self, track, calib_p2):
         """
@@ -116,7 +156,7 @@ class Tracker():
     def predict_3d(self):
         # tracks_3d的定义：self.tracks_3d.append(Track_3D(pose, self.kf_3d, self.track_id_3d, self.min_frames, self.max_age, self.additional_info))
         for track in self.tracks_3d:
-            track.predict_3d(track.kf_3d)
+            track.predict_3d(track.kf_3d, apn_cfg=self.apn_ctra_cfg)
 
     def predict_2d(self):
         for track in self.tracks_2d:
@@ -144,11 +184,13 @@ class Tracker():
         for track in self.tracks_2d:
             track.ego_motion_compensation_2d_imu(frame, calib_file, oxts)
     def update(self, dets_3d_fusion, dets_3d_only, dets_2d_high, dets_2d_low, calib_p2=None):
-        # 1st Level of Association
+        # =========================================================
+        # 1st Level: Fusion Match (高质量3D + 2D)
+        # =========================================================
         matched_fusion_idx, unmatched_dets_fusion_idx, unmatched_trks_fusion_idx = associate_dets_to_trks_fusion(
             dets_3d_fusion, self.tracks_3d, self.cost_3d, self.threshold_3d, metric='match_3d', cost_params=self.ro_gdiou_params)
         for detection_idx, track_idx in matched_fusion_idx:
-            self.tracks_3d[track_idx].update_3d(dets_3d_fusion[detection_idx])
+            self.tracks_3d[track_idx].update_3d(dets_3d_fusion[detection_idx], cg_akf_cfg=self.cg_akf_cfg)            
             self.tracks_3d[track_idx].state = 2
             self.tracks_3d[track_idx].fusion_time_update = 0
         for track_idx in unmatched_trks_fusion_idx:
@@ -157,13 +199,16 @@ class Tracker():
         for detection_idx in unmatched_dets_fusion_idx:
             self.initiate_trajectory_3d(dets_3d_fusion[detection_idx])
 
-        #  2nd Level of Association
+        # =========================================================
+        # 2nd Level: 3D Only Match (含 MCTrack RV 逻辑)
+        # =========================================================
         # 找出一阶段未匹配的3D轨迹
         self.unmatch_tracks_3d1 = [t for t in self.tracks_3d if t.time_since_update > 0]
         # --- Stage 1: 原始 BEV/3D 匹配 ---
         matched_only_idx, unmatched_dets_only_idx, unmatched_trks_only_idx_local = associate_dets_to_trks_fusion(
-            dets_3d_only, self.unmatch_tracks_3d1, self.cost_3d, self.threshold_3d, metric='match_3d', cost_params=self.ro_gdiou_params)
-
+            dets_3d_only, self.unmatch_tracks_3d1, self.cost_3d, self.threshold_3d, metric='match_3d', 
+            cost_params=self.ro_gdiou_params,
+            dist_aware_cfg=self.dist_aware_cfg)
         # --- Stage 2: MCTrack RV (2D) 补救匹配 ---
         # 只有在开关开启、P2存在、且有残余匹配项时才执行
         if (self.use_rv_match == "True") and (calib_p2 is not None) and \
@@ -229,7 +274,7 @@ class Tracker():
         for detection_idx, track_idx in matched_only_idx:
             for index, t in enumerate(self.tracks_3d):
                 if t.track_id_3d == self.unmatch_tracks_3d1[track_idx].track_id_3d:
-                    t.update_3d(dets_3d_only[detection_idx])
+                    t.update_3d(dets_3d_only[detection_idx], cg_akf_cfg=self.cg_akf_cfg)
                     index_to_delete.append(track_idx)
                     break
         # 找出二阶段未匹配的3D轨迹(未匹配)
@@ -240,7 +285,9 @@ class Tracker():
         self.unmatch_tracks_3d2 = [t for t in self.tracks_3d if t.time_since_update == 0 and t.hits == 1]
         self.unmatch_tracks_3d = self.unmatch_tracks_3d1 + self.unmatch_tracks_3d2
 
-        # 3rd Level of Association
+        # =========================================================
+        # 3rd Level: FGA / 2D Match 
+        # =========================================================
         if self.use_fga == "True":
             # >>>>>>>>>> 模式 A: LGTrack 级联匹配 >>>>>>>>>>
             
@@ -304,25 +351,31 @@ class Tracker():
         #  似乎不存在未匹配轨迹3D转2D的过程，只有待确认轨迹2D转3D的过程
         #  确认最终输出(也是可视化的结果)是3D轨迹
         matched_track_2d, unmatch_tracks_2d = associate_2D_to_3D_tracking(self.tracks_2d, self.unmatch_tracks_3d, self.threshold_2d)
-        # index_to_delete2 = []
+        if DELETE_2D:
+            index_to_delete2 = []
         for track_idx_2d, track_idx_3d in matched_track_2d:
-            if self.tracks_2d[track_idx_2d].time_since_update > self.cfg.remain_threshold_2d:
-                continue
+            if not DELETE_2D:
+                if self.tracks_2d[track_idx_2d].time_since_update > self.cfg.remain_threshold_2d:
+                    continue
             for i in range(len(self.tracks_3d)):
                 # 打印触发的次数
-                # print(self.tracks_3d[i].track_id_3d)
                 if self.tracks_3d[i].track_id_3d == self.unmatch_tracks_3d[track_idx_3d].track_id_3d:
                     self.tracks_3d[i].age = self.tracks_2d[track_idx_2d].age + 1
                     self.tracks_3d[i].time_since_update = 0
                     if self.tracks_2d[track_idx_2d].hits >= 2:
-                        # self.tracks_3d[i].hits = self.tracks_2d[track_idx_2d].hits + 1
-                        self.tracks_3d[i].hits += 1
+                        if DELETE_2D:
+                            self.tracks_3d[i].hits = self.tracks_2d[track_idx_2d].hits + 1
+                        else :
+                            self.tracks_3d[i].hits += 1
                     else:
                         self.tracks_3d[i].hits += 1
                     self.tracks_3d[i].state_update()
-            # index_to_delete2.append(track_idx_2d)
-        # self.tracks_2d = [self.tracks_2d[i] for i in range(len(self.tracks_2d)) if i not in index_to_delete2]
-        self.tracks_2d = [t for t in self.tracks_2d if not t.is_deleted()]
+            if DELETE_2D:
+                index_to_delete2.append(track_idx_2d)
+        if DELETE_2D:
+            self.tracks_2d = [self.tracks_2d[i] for i in range(len(self.tracks_2d)) if i not in index_to_delete2]
+        else:
+            self.tracks_2d = [t for t in self.tracks_2d if not t.is_deleted()]
         self.tracks_3d = [t for t in self.tracks_3d if not t.is_deleted()]
 
     def initiate_trajectory_3d(self, detection):
@@ -348,10 +401,11 @@ class Tracker():
         
     def _update_2d_track_state(self, track_idx, detection):
         if self.kfstate_2d == 'ltrb':
-            self.tracks_2d[track_idx].ltbr_update_2d(self.kf_2d, detection)
+            # 传入 self.cg_akf_2d_cfg
+            self.tracks_2d[track_idx].ltbr_update_2d(self.kf_2d, detection, self.cg_akf_2d_cfg)
         elif self.kfstate_2d == 'ltrbc':
-            self.tracks_2d[track_idx].ltbrc_update_2d(self.kf_2d, detection)
+            self.tracks_2d[track_idx].ltbrc_update_2d(self.kf_2d, detection, self.cg_akf_2d_cfg)
         elif self.kfstate_2d == 'xyah':
-            self.tracks_2d[track_idx].update_2d(self.kf_2d, detection)
+            self.tracks_2d[track_idx].update_2d(self.kf_2d, detection, self.cg_akf_2d_cfg)
         else:
             raise ValueError("kfstate_2d must be ltrb、ltrbc or xyah")

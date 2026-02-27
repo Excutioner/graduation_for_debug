@@ -137,7 +137,7 @@ class KalmanFilter(object):
             self._update_mat, covariance, self._update_mat.T))
         return mean, covariance + innovation_cov
 
-    def update(self, mean, covariance, measurement):
+    def update(self, mean, covariance, measurement, confidence_factor = None):
         """Run Kalman filter correction step.
 
         Parameters

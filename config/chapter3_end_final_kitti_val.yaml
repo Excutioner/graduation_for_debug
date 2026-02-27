@@ -1,15 +1,15 @@
 dataset: 'kitti'
 
 dataset_path: '/datav/DeepFusionMOT/data/kitti'
-spilt: 'testing'
+spilt: 'training'
 
 
 #----------------------------Detector--------------------------
 # detector_2d: 'rrc'
 # detector_2d: 'yolox'
-detector_2d: 'yolox_my'
+# detector_2d: 'yolox_my'
 # detector_2d: 'yolox_1280_optimized'
-# detector_2d: 'yolox_apollo_kitti_1280'
+detector_2d: 'yolox_apollo_kitti_1280'
 # detector_2d: 'yolox_apollo_l4_1280'
 # detector_2d: 'yolox_withtruck'
 # detector_3d: 'pointrcnn'
@@ -17,7 +17,7 @@ detector_3d: 'virconv'
 # detector_3d: 'casa'
 
 # 3B_Env_CMC_CV_yolox_1280_optimized_withrect_withex_ltrb
-root_path: 'chapter4_end_test/KITTI'
+root_path: 'chapter3_end_3dcg_akf_tau1100/KITTI'
 # save_path: '0.55_3dvc2dx1280_noexcmc_ltrbc_70c_r2i_apollokitti_cv_c40_hits4/KITTI/training'
 # eval_save_path: '0.55_3dvc2dx1280_noexcmc_ltrbc_70c_r2i_apollokitti_cv_c40_hits4/KITTI/data/training'
 dets_path_3d: "data/detections/3D"
@@ -26,7 +26,7 @@ dets_path_2d: "data/detections/2D"
 # eval_root_dir: '0.55_3dvc2dx1280_noexcmc_ltrbc_70c_r2i_apollokitti_cv_c40_hits4/KITTI/training'
 save_2d_image: "False"
 # ------------------------CMC--------------------------
-if_cmc: "False"
+if_cmc: "True"
 # ex_cfg: "cmc_no_ex_yolox/training/image_02/"
 # ex_cfg: "cmc_no_ex_trad/training/image_02/"
 # ex_cfg: "cmc_with_ex_yolox_withtruck/training/image_02/"
@@ -41,11 +41,11 @@ kfstate_2d: "xyah"
 #------------------------Motion model--------------------------
 motion_model: "CV"
 # r2i默认为True，效果更好
-cmc_with_rect2imu : "False"
+cmc_with_rect2imu : "True"
 
 #------------------------Dataset spilt--------------------------
-tracking_seqs: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28]
-# tracking_seqs: [0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20]
+#tracking_seqs: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28]
+tracking_seqs: [0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20]
 
 #----------------------------Category--------------------------
 #cat_list: ['Car', 'Pedestrian']
@@ -96,10 +96,10 @@ Car:
 
   micro_innovation:
     # 创新点1: 置信度引导的自适应卡尔曼滤波 (CG-AKF)
-    use_cg_akf: false
+    use_cg_akf: true
     cg_akf_params:
-      mu: 1.0  # 阈值
-      tau: 1.0 # 灵敏调节，越大膨胀噪声越少
+      mu: 1.02  # 阈值
+      tau: 11.0 # 灵敏调节，越大膨胀噪声越少
     # --- [新增] 2D CG-AKF 配置 ---
     use_cg_akf_2d: false    # 2D 独立开关
     cg_akf_2d_params:

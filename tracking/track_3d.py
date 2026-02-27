@@ -38,24 +38,68 @@ class Track_3D:
         self.fusion_time_update = 0 # 代表未与fusion后的det(高质量det)匹配的帧数
         self.compensated_2d = False # 代表3D轨迹的2D信息是否被运动补偿，在卡尔曼update处置False，在2D运动补偿处置True
 
-    def predict_3d(self, trk_3d):
-        self.pose = trk_3d.predict()
+    def predict_3d(self, trk_3d, apn_cfg=None):
+        # 判断一下，如果
+        if (apn_cfg.get('use_apn_ctra', False)):
+            self.pose = trk_3d.predict(apn_cfg=apn_cfg)
+        else:
+            self.pose = trk_3d.predict()
 
-    def update_3d(self, detection_3d):
-        self.kf_3d.update(detection_3d.bbox)
+    def update_3d(self, detection_3d, cg_akf_cfg=None):
+        """
+        创新点: 置信度引导的自适应卡尔曼滤波 (CG-AKF)
+        """
+        # 1. 获取检测置信度 (根据之前的分析，score 在 index 6)
+        # additional_info: [alpha, type, x1, y1, x2, y2, score]
+        try:
+            current_logit = detection_3d.additional_info[6]
+        except IndexError:
+            current_logit = 5.0 # Fallback
+            
+        # 2. 动态调整 R 矩阵
+        if cg_akf_cfg and cg_akf_cfg.get('use_cg_akf', False):
+            # 获取参数 mu 和 tau
+            params = cg_akf_cfg.get('cg_akf_params', {})
+            mu = params.get('mu', 1.0)   # 论文推荐截断阈值
+            tau = params.get('tau', 1.0) # 论文推荐灵敏系数
+            
+            # --- 核心修改：直接代入公式 ---
+            # 论文公式: R_new = R_base * (1 + exp((mu - logit) / tau))
+            # 当 logit < mu (遮挡/低置信度) -> 指数项变大 -> R 变大 -> 信任预测
+            # 当 logit > mu (正常) -> 指数项趋近 0 -> R 保持 R_base
+            adaptive_factor = 1.0 + np.exp((mu - current_logit) / tau)
+            
+            # 备份原始 R
+            original_R = self.kf_3d.kf.R.copy()
+            
+            # 应用自适应因子
+            self.kf_3d.kf.R *= adaptive_factor
+            
+            # 执行更新
+            self.kf_3d.update(detection_3d.bbox)
+            
+            # 恢复原始 R (保持滤波器参数纯净)
+            self.kf_3d.kf.R = original_R
+            
+        else:
+            # 原始逻辑
+            self.kf_3d.update(detection_3d.bbox)
+
+        # 3. 状态维护 (保持不变)
         self.additional_info = detection_3d.additional_info
         self.compensated_2d = False
         self.pose = np.concatenate(self.kf_3d.kf.x[:7], axis=0)
         self.hits += 1
         self.age += 1
         self.time_since_update = 0
+        
         if self.hits >= self.n_init:
             self.state = TrackState.Confirmed
         else:
             self.state = TrackState.Tentative
-        if  self.fusion_time_update >= 3:
+            
+        if self.fusion_time_update >= 3:
             self.state = TrackState.Reactivate
-
     def state_update(self):
         if self.hits >= self.n_init:
             self.state = TrackState.Confirmed
@@ -206,14 +250,26 @@ class Track_3D:
             # 3. 执行协方差更新 P = J * P * J.T
             self.kf_3d.kf.P = J_rot @ self.kf_3d.kf.P @ J_rot.T
     def ego_motion_compensation_2d(self, frame, cmc_transforms):
-        if frame <= 1:
-            return
+        # 【建议修改】对于3D轨迹，我们不需要用纯2D的方式来更新 additional_info
+        # 因为 additional_info 里的 2D 框在这一帧已经是“过时”的了。
+        # 真正的 2D 位置应该由 3D Pose 投影得到。
+        # 所以这里可以直接 return，或者只做保留而不覆盖。
+        
+        # 如果你必须保留它（比如为了可视化或者其他没改到的逻辑），
+        # 请记住：这个 additional_info[2:6] 是不准确的（没有自身速度）。
+        
+        # 最佳做法：直接注释掉下面具体的更新逻辑，或者让它不生效
+        pass 
+        
+        # 原有逻辑（已废弃/不推荐）：
+        # if frame <= 1:
+        #     return
 
-        predicted_pts_before_cmc = self.additional_info[2:6]
-        predicted_pts_before_cmc = predicted_pts_before_cmc.reshape(-1, 1, 2)
-        transform = np.array(cmc_transforms[frame-1][1:]).reshape(2, 3)
-        predicted_pts_after_cmc = cv2.transform(predicted_pts_before_cmc, transform)  # shape: (N, 1, 2)
-        predicted_pts_after_cmc = predicted_pts_after_cmc.reshape(-1, 4)  # 转换回(N, 2)形状
-        # 更新3D轨迹中的2D信息
-        self.additional_info[2:6] = predicted_pts_after_cmc[0]
+        # predicted_pts_before_cmc = self.additional_info[2:6]
+        # predicted_pts_before_cmc = predicted_pts_before_cmc.reshape(-1, 1, 2)
+        # transform = np.array(cmc_transforms[frame-1][1:]).reshape(2, 3)
+        # predicted_pts_after_cmc = cv2.transform(predicted_pts_before_cmc, transform)  # shape: (N, 1, 2)
+        # predicted_pts_after_cmc = predicted_pts_after_cmc.reshape(-1, 4)  # 转换回(N, 2)形状
+        # # 更新3D轨迹中的2D信息
+        # self.additional_info[2:6] = predicted_pts_after_cmc[0]
         

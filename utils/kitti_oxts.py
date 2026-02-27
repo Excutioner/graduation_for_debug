@@ -1,4 +1,5 @@
 import numpy as np, json
+import os
 
 from utils.coordinate_transformation import TransformationKitti
 from utils.file_operation.file import fileparts
@@ -236,3 +237,34 @@ def get_ego_traj(imu_poses, frame, pref, futf, inverse=False, only_fut=False):
         return all_xyz, all_rot_list, left, right
     
     
+def load_poses_matrix(pose_file):
+    """
+    Load pre-computed pose matrices from a text file.
+    Format: Each line contains 12 floats representing a flattened 3x4 matrix.
+    Used for: nuScenes, Waymo (converted formats).
+    """
+    if not os.path.exists(pose_file):
+        print(f"[Warning] Pose file not found: {pose_file}")
+        return np.eye(4)[None, :, :] # Return identity if missing to prevent crash
+
+    # 读取数据
+    try:
+        raw_data = np.loadtxt(pose_file)
+    except ValueError:
+        # 处理可能的空文件或格式错误
+        return np.eye(4)[None, :, :]
+
+    # 处理只有一帧的情况 (ndim=1)
+    if raw_data.ndim == 1:
+        raw_data = raw_data.reshape(1, -1)
+
+    num_frames = raw_data.shape[0]
+    poses = []
+
+    for i in range(num_frames):
+        pose = np.eye(4)
+        # 将 12 个数还原为 3x4 矩阵
+        pose[:3, :] = raw_data[i].reshape(3, 4)
+        poses.append(pose)
+
+    return np.array(poses) # Shape: (N, 4, 4)

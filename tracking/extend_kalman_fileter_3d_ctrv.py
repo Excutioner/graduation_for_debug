@@ -167,35 +167,45 @@ class KalmanBoxTracker(object):
         while self.kf.x[3] < -np.pi: 
             self.kf.x[3] += np.pi * 2
 
-    def predict(self):
+    def predict(self, apn_cfg=None): # [Modified] Add apn_cfg
         """
         Advances the state vector and returns the predicted bounding box estimate.
         """
+        # [APN Logic for CTRV]
+        if apn_cfg and apn_cfg.get('use_apn_ctra', False):
+            try:
+                # CTRV state in DFM: [x, y, z, ry, l, w, h, v, omega]
+                # omega is at index 8
+                omega = self.kf.x[8]
+                
+                params = apn_cfg.get('apn_params', {})
+                k_omega = params.get('maneuver_factor_omega', 2.0)
+                # CTRV assumes constant turn rate, no linear acceleration
+                
+                maneuver_factor = 1.0 + k_omega * np.abs(float(omega))
+                self.kf.Q = self.original_Q * maneuver_factor
+            except IndexError:
+                pass
+
         # 格式转换
         state_mat = np.mat(self.DFM_to_CTRV(self.kf.x))
-        
-        # 使用 CTRV 模型进行非线性状态转移
         predicted_state = self.model.stateTransition(state_mat)
-        
-        # 转回 DFM 格式
         predicted_state = self.CTRV_to_DFM(predicted_state)
         
-        # 更新状态
         self.kf.x = predicted_state.A.flatten()
         
-        # 角度标准化
-        if self.kf.x[3] >= np.pi: 
-            self.kf.x[3] -= np.pi * 2
-        if self.kf.x[3] < -np.pi: 
-            self.kf.x[3] += np.pi * 2
+        # ... (angle normalization same as before)
+        if self.kf.x[3] >= np.pi: self.kf.x[3] -= np.pi * 2
+        if self.kf.x[3] < -np.pi: self.kf.x[3] += np.pi * 2
             
-        # 更新协方差矩阵 P = F P F.T + Q
         F = self.model.getTransitionF(state_mat)
         self.kf.P = F * self.kf.P * F.T + self.kf.Q
         
-        # 返回前7位作为预测框 [x, y, z, ry, l, w, h]
+        # [APN] Restore Q
+        if apn_cfg and apn_cfg.get('use_apn_ctra', False):
+            self.kf.Q = self.original_Q
+        
         return self.kf.x[:7].flatten()
-
     def get_state(self):
         """
         Returns the current bounding box estimate.

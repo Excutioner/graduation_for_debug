@@ -34,7 +34,8 @@ class KalmanBoxTracker(object):
         
         # MARK:  如果检测器的输出有速度，则此处需要修改
         self.kf.x[:7] = bbox3D.reshape((7, 1))   # [x,y,z,ry,l,w,h,v,a,omega]
-
+        # [新增] 备份初始 Q 矩阵
+        self.original_Q = self.kf.Q.copy()
     def DFM_to_CTRA(self,DFM_bbox3D):
         """
         格式从[x, y, z, ry, l, w, h, v, a, omega]转换为
@@ -134,18 +135,52 @@ class KalmanBoxTracker(object):
         while self.kf.x[3] < -np.pi: 
             self.kf.x[3] += np.pi * 2
 
-    def predict(self):
+    def predict(self, apn_cfg=None):
         """
         Advances the state vector and returns the predicted bounding box estimate.
         """
-        # 使用CTRA模型进行状态转移
+        # 1. [创新点] 自适应过程噪声 (APN)
+        if apn_cfg and apn_cfg.get('use_apn_ctra', False):
+            # 获取当前运动状态 
+            # DFM state: [x, y, z, ry, l, w, h, v, a, omega]
+            # accel = index 8, omega = index 9
+            try:
+                # 获取状态值
+                accel = self.kf.x[8]
+                omega = self.kf.x[9]
+                
+                # [关键] 设置触发阈值 (Dead Zone)
+                # 只有当角速度 > 0.05 rad/s (约3度/秒) 时才认为是转弯
+                OMEGA_THRESH = 0.02
+                # 只有当加速度 > 0.5 m/s^2 时才认为是机动
+                ACCEL_THRESH = 0.5
+                
+                params = apn_cfg.get('apn_params', {})
+                k_omega = params.get('maneuver_factor_omega', 10.0) # 建议给大一点
+                k_accel = params.get('maneuver_factor_accel', 0.5)
+                
+                maneuver_factor = 1.0
+                
+                # 只有超过阈值才开始增加因子
+                if np.abs(omega) > OMEGA_THRESH:
+                    maneuver_factor += k_omega * (np.abs(omega) - OMEGA_THRESH)
+                
+                if np.abs(accel) > ACCEL_THRESH:
+                    maneuver_factor += k_accel * (np.abs(accel) - ACCEL_THRESH)
+                
+                # 动态膨胀 Q
+                self.kf.Q = np.multiply(self.original_Q, maneuver_factor)
+            except IndexError:
+                pass
+
+        # 2. 标准 CTRA 预测
         state_mat = np.mat(self.DFM_to_CTRA(self.kf.x))
         predicted_state = self.model.stateTransition(state_mat)
         predicted_state = self.CTRA_to_DFM(predicted_state)
-        # 更新状态
+        
         self.kf.x = predicted_state.A.flatten()
         
-        # 确保预测后的角度仍在[-π, π]范围内
+        # 角度标准化
         if self.kf.x[3] >= np.pi: 
             self.kf.x[3] -= np.pi * 2
         if self.kf.x[3] < -np.pi: 
@@ -155,6 +190,12 @@ class KalmanBoxTracker(object):
         F = self.model.getTransitionF(state_mat)
         self.kf.P = F * self.kf.P * F.T + self.kf.Q
         
+        # 3. 恢复原始 Q (如果使用了 APN)
+        # 因为下一帧我们需要基于干净的原始 Q 重新计算 maneuver_factor，避免 Q 无限膨胀
+        if apn_cfg and apn_cfg.get('use_apn_ctra', False):
+            self.kf.Q = self.original_Q
+
+        # 返回前7位作为预测框 [x, y, z, ry, l, w, h]
         return self.kf.x[:7].flatten()
     def get_state(self):
         """

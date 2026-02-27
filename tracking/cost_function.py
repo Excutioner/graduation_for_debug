@@ -84,8 +84,6 @@ def iou_2d_c(boxA, boxB, w = 0.0):
     boxB: [x1, y1, x2, y2, conf] (Track)
     Return: IoU - abs(diff_conf)
     """
-    # 1. 计算标准 IoU
-    # 注意：输入带有 conf，所以只取前4位计算坐标
     coordsA = [int(x) for x in boxA[:4]]
     coordsB = [int(x) for x in boxB[:4]]
 
@@ -95,23 +93,25 @@ def iou_2d_c(boxA, boxB, w = 0.0):
     yB = min(coordsA[3], coordsB[3])
 
     interArea = max(0, xB - xA + 1) * max(0, yB - yA + 1)
-    boxAArea = (coordsA[2] - coordsA[0] + 1) * (coordsA[3] - coordsA[1] + 1)
-    boxBArea = (coordsB[2] - coordsB[0] + 1) * (coordsB[3] - coordsB[1] + 1)
     
-    iou = interArea / float(boxAArea + boxBArea - interArea)
+    # 【修复】加入 max(0, ...) 避免负数面积
+    boxAArea = max(0, coordsA[2] - coordsA[0] + 1) * max(0, coordsA[3] - coordsA[1] + 1)
+    boxBArea = max(0, coordsB[2] - coordsB[0] + 1) * max(0, coordsB[3] - coordsB[1] + 1)
+    
+    unionArea = boxAArea + boxBArea - interArea
+    
+    # 【修复】除零保护
+    iou = interArea / float(unionArea) if unionArea > 0 else 0.0
 
-    # 2. 计算置信度差异
     conf_det = boxA[4]
     conf_trk = boxB[4]
     conf_diff = abs(conf_det - conf_trk)
 
-    # 3. 组合得分 (IoU 减去 置信度差异)
-    # 你可以在这里加权重，例如: iou - 0.5 * conf_diff
     return iou - w * conf_diff
 
 def iou_2d(boxA, boxB):
-    boxA = [int(x) for x in boxA]
-    boxB = [int(x) for x in boxB]
+    boxA = [int(x) for x in boxA[:4]]
+    boxB = [int(x) for x in boxB[:4]]
 
     xA = max(boxA[0], boxB[0])
     yA = max(boxA[1], boxB[1])
@@ -120,31 +120,43 @@ def iou_2d(boxA, boxB):
 
     interArea = max(0, xB - xA + 1) * max(0, yB - yA + 1)
 
-    boxAArea = (boxA[2] - boxA[0] + 1) * (boxA[3] - boxA[1] + 1)
-    boxBArea = (boxB[2] - boxB[0] + 1) * (boxB[3] - boxB[1] + 1)
+    # 【修复】加入 max(0, ...) 避免负数面积
+    boxAArea = max(0, boxA[2] - boxA[0] + 1) * max(0, boxA[3] - boxA[1] + 1)
+    boxBArea = max(0, boxB[2] - boxB[0] + 1) * max(0, boxB[3] - boxB[1] + 1)
 
-    iou = interArea / float(boxAArea + boxBArea - interArea)
+    unionArea = boxAArea + boxBArea - interArea
+    
+    # 【修复】除零保护
+    iou = interArea / float(unionArea) if unionArea > 0 else 0.0
 
     return iou
 
 
 def giou_2d(boxA, boxB):
-    x1, x2, y1, y2 = boxA[0], boxA[1], boxA[2], boxA[3]  # 分别是第一个矩形左右上下的坐标
+    x1, x2, y1, y2 = boxA[0], boxA[1], boxA[2], boxA[3]  
     x3, x4, y3, y4 = boxB[0], boxB[1], boxB[2], boxB[3]
     iou = iou_2d(boxA, boxB)
-    area_C = (max(x1, x2, x3, x4) - min(x1, x2, x3, x4)) * (max(y1, y2, y3, y4) - min(y1, y2, y3, y4))
-    area_1 = (x2 - x1) * (y1 - y2)
-    area_2 = (x4 - x3) * (y3 - y4)
+    
+    area_C = max(0, max(x1, x2, x3, x4) - min(x1, x2, x3, x4)) * max(0, max(y1, y2, y3, y4) - min(y1, y2, y3, y4))
+    
+    # 【修复】如果闭包面积为0，直接返回普通的 IoU
+    if area_C <= 0:
+        return iou
+        
+    area_1 = max(0, x2 - x1) * max(0, y2 - y1) # 修正高度计算避免负数
+    area_2 = max(0, x4 - x3) * max(0, y4 - y3)
     sum_area = area_1 + area_2
-    w1 = x2 - x1  # 第一个矩形的宽
-    w2 = x4 - x3  # 第二个矩形的宽
-    h1 = y1 - y2
-    h2 = y3 - y4
-    W = min(x1, x2, x3, x4) + w1 + w2 - max(x1, x2, x3, x4)  # 交叉部分的宽
-    H = min(y1, y2, y3, y4) + h1 + h2 - max(y1, y2, y3, y4)  # 交叉部分的高
-    Area = W * H  # 交叉的面积
-    add_area = sum_area - Area  # 两矩形并集的面积
-    end_area = (area_C - add_area) / area_C  # (c/(AUB))/c的面积
+    
+    w1 = max(0, x2 - x1)  
+    w2 = max(0, x4 - x3)  
+    h1 = max(0, y2 - y1)
+    h2 = max(0, y4 - y3)
+    
+    W = max(0, min(x1, x2, x3, x4) + w1 + w2 - max(x1, x2, x3, x4))  
+    H = max(0, min(y1, y2, y3, y4) + h1 + h2 - max(y1, y2, y3, y4))  
+    Area = W * H  
+    add_area = sum_area - Area  
+    end_area = (area_C - add_area) / float(area_C)  
     giou = iou - end_area
     return giou
 

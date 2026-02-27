@@ -85,17 +85,16 @@ class Tracker():
         else :
             raise ValueError("kfstate_2d must be ltrb、ltrbc or xyah")
         
-        if cfg.dataset == 'nuscenes':
-            if cfg.get('motion_model', 'CV') == 'CTRA':
-                from tracking.extend_kalman_fileter_3d_ctra_nusc import KalmanBoxTracker
-            else:
-                from tracking.kalman_fileter_3d import KalmanBoxTracker  # CV 无需修改，通用！
-        else:
-            # 原始的 KITTI 逻辑
-            if cfg.get('motion_model', 'CV') == 'CTRA':
-                from tracking.extend_kalman_fileter_3d_ctra import KalmanBoxTracker
-            else:
-                from tracking.kalman_fileter_3d import KalmanBoxTracker
+        if self.motion_model == "CTRA":
+            from tracking.extend_kalman_fileter_3d_ctra import KalmanBoxTracker
+        elif self.motion_model == "CTRV":
+            from tracking.extend_kalman_fileter_3d_ctrv import KalmanBoxTracker
+        elif self.motion_model == "CV":
+            from tracking.kalman_fileter_3d import  KalmanBoxTracker
+        elif self.motion_model == "CA":  # [新增] CA 模型支持
+            from tracking.kalman_filter_3d_ca import KalmanBoxTracker
+        else :
+            raise ValueError("motion_model must be CTRA、CA、CTRV or CV")
         self.KalmanBoxTracker_Class = KalmanBoxTracker
     def project_track_to_2d(self, track, calib_p2):
         """

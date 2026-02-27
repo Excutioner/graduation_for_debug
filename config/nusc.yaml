@@ -1,0 +1,40 @@
+dataset: 'nuscenes'
+dataset_path: '/datav/DeepFusionMOT/data/nuscenes/train' # 替换为你的实际路径
+spilt: 'val'
+# 这里的 3 对应 main.py 里的 'scene-0003'。你可以换成你 json 里确实存在的场景编号
+tracking_seqs: [3]  
+if_cmc: 'False' # nuScenes 下强制关闭 CMC
+
+kfstate_2d: "xyah"
+
+root_path: 'Debug/NUSCENES'
+# 输入的检测结果路径
+# nusc_3d_json_path: '/datav/DeepFusionMOT/data/detections/3D/nuscenes/nusc_results_flip/infos_test_10sweeps_withvelo_filter_True.json' 
+# nusc_3d_json_path: '/datav/DeepFusionMOT/data/detections/3D/nuscenes/nusc_results_flip/infos_train_10sweeps_withvelo_filter_True.json' 
+nusc_3d_json_path: '/datav/DeepFusionMOT/data/detections/3D/nuscenes/nusc_results_flip/infos_val_10sweeps_withvelo_filter_True.json' 
+
+nusc_2d_json_dir: '/datav/DeepFusionMOT/data/detections/2D/mmdetection_cascade_x101/val' 
+
+# 结果保存路径
+save_path: './nus_results'
+
+motion_model: "CV"
+# r2i默认为True，效果更好
+cmc_with_rect2imu : "False"
+
+# [这里原样保留你 kitti.yaml 里的 cat_list 和各个类别的超参数，例如 fga, high_conf 等]
+cat_list: ['Car']
+use_fga: "False"
+Car:
+  max_ages: 25
+  min_frames: 4
+  metric_3d: iou_3d
+  metric_2d: iou_2d
+  cost_function:
+    iou_2d: 0.55
+    iou_3d: 0.01
+  fga:
+    high_conf: 0.4
+    junk_conf: 0.2
+    loc_thresh: 0.65
+# ... 保留其他 tracker 需要的参数 ...

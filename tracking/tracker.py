@@ -21,8 +21,17 @@ class Tracker():
         self.min_frames = self.cfg[category].min_frames
         self.tracks_3d = []
         self.tracks_2d = []
-        self.track_id_3d = 0   # The id of 3D track is represented by an even number.
-        self.track_id_2d = 1   # The id of 3D track is represented by an odd number.
+        
+        # =================================================================
+        # 🚀 核心修复：为不同类别生成独立的 ID 偏移量，彻底消灭全局 ID 冲突！
+        # =================================================================
+        cat_list_lower = [c.lower() for c in cfg.cat_list]
+        cat_idx = cat_list_lower.index(category.lower())
+        id_offset = cat_idx * 100000  # 每个类别间隔 10 万个 ID
+        
+        self.track_id_3d = id_offset + 0   # The id of 3D track is represented by an even number.
+        self.track_id_2d = id_offset + 1   # The id of 2D track is represented by an odd number.
+        # =================================================================
         self.unmatch_tracks_3d = []
         self.kfstate_2d = cfg.kfstate_2d
         self.motion_model = cfg.motion_model

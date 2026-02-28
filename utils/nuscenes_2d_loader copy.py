@@ -25,7 +25,7 @@ class NuScenes2DLoader:
         返回格式:
         {
             'sample_token_1': {
-                'CAM_FRONT': [ {'bbox': [x1,y1,x2,y2], 'score': s, 'class_label': 'car'}, ... ],
+                'CAM_FRONT': [ {'bbox': [x1,y1,x2,y2], 'score': s, 'class': 'car'}, ... ],
                 'CAM_FRONT_LEFT': [ ... ],
                 ...
             },
@@ -108,3 +108,4 @@ if __name__ == '__main__':
             
     except Exception as e:
         print(e)
+    

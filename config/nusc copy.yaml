@@ -2,9 +2,11 @@ dataset: 'nuscenes'
 dataset_path: '/datav/DeepFusionMOT/data/nuscenes/train'
 spilt: 'val'
 
+# 注释掉此行，代表测试验证集全部 150 个场景
 tracking_seqs: []  
 
 if_cmc: 'False'
+# 为了加速全集评估，建议把存图关掉，否则生成上万张图极其耗时！
 save_2d_image: "False"
 kfstate_2d: "xyah"
 
@@ -19,13 +21,12 @@ motion_model: "CTRA"
 cmc_with_rect2imu : "False"
 use_fga: "False"
 
+# 包含所有需要评测的 7 大类别
 cat_list: ['car', 'truck', 'bus', 'trailer', 'pedestrian', 'motorcycle', 'bicycle']
-# cat_list: ['bicycle']
 
-
-# ==================== 1. Car (保持巅峰配置) ====================
+# ==================== 1. Car (汽车) ====================
 car:
-  use_rv_match: "True" # 彻底关闭 2D 干扰，回归纯 3D 王者形态
+  use_rv_match: "True"
   rv_metric: sdiou_2d
   rv_threshold: 0.5  
   max_ages: 3
@@ -34,14 +35,14 @@ car:
   metric_2d: iou_2d
   cost_function:
     iou_2d: 0.55
-    ro_gdiou_3d_nusc: -0.25 # Car 形状规则，继续用 ro_gdiou
-  cost_options:
-    iou_2d_c: { w: 0.4 }
-    ro_gdiou_3d_nusc: { w1: 0.5, w2: 1.5, depth_weight: 1.0 }
+    ro_gdiou_3d_nusc: -0.25
   fga:
     high_conf: 0.4
     junk_conf: 0.1
     loc_thresh: 0.65
+  cost_options:
+    iou_2d_c: { w: 0.4 }
+    ro_gdiou_3d_nusc: { w1: 0.5, w2: 1.5, depth_weight: 1.0 }
 
   micro_innovation:
     # 创新点1: 置信度引导的自适应卡尔曼滤波 (CG-AKF)
@@ -69,55 +70,10 @@ car:
     aw_ro_gdiou_params:
       depth_weight: 0.3  # 纵向(深度)惩罚权重，<1.0 表示容忍深度误差
 
-# ==================== 2. Bus (公交车，刚体，保持不变) ====================
-bus:
-  use_rv_match: "True" # 彻底关闭 2D 干扰，回归纯 3D 王者形态
-  rv_metric: sdiou_2d
-  rv_threshold: 0.5  
-  max_ages: 3
-  min_frames: 1
-  metric_3d: ro_gdiou_3d_nusc
-  metric_2d: iou_2d
-  cost_function:
-    iou_2d: 0.55
-    ro_gdiou_3d_nusc: -0.25 # Car 形状规则，继续用 ro_gdiou
-  cost_options:
-    iou_2d_c: { w: 0.4 }
-    ro_gdiou_3d_nusc: { w1: 0.5, w2: 1.5, depth_weight: 1.0 }
-  fga:
-    high_conf: 0.4
-    junk_conf: 0.1
-    loc_thresh: 0.65
 
-  micro_innovation:
-    # 创新点1: 置信度引导的自适应卡尔曼滤波 (CG-AKF)
-    use_cg_akf: false
-    cg_akf_params:
-      mu: 1.0  # 阈值
-      tau: 1.0 # 灵敏调节，越大膨胀噪声越少
-    # --- [新增] 2D CG-AKF 配置 ---
-    use_cg_akf_2d: false    # 2D 独立开关
-    cg_akf_2d_params:
-      mu: 3.0           # 2D 建议值 3.0 (2D框本身较抖，惩罚不宜过大)
-      tau: 1.0
-    # 创新点2: 距离感知的各向异性匹配 (Distance-Aware Matching)
-    use_dist_aware: false
-    dist_aware_params:
-      far_dist_thresh: 45.0 # 超过45米视为远距离
-      far_iou_thresh: 0.25  # 远距离放宽IoU阈值 (解决深度抖动导致IoU过低的问题)
-    # 3. [新增] 自适应过程噪声 CTRA (APN-CTRA)
-    use_apn_ctra: false
-    apn_ctra_params:
-      maneuver_factor_omega: 80.0  # 角速度影响因子
-      maneuver_factor_accel: 5.0  # 加速度影响因子
-    # 4. [新增] 各向异性加权 Ro-GDIoU (AW-Ro-GDIoU)
-    use_aw_ro_gdiou: false
-    aw_ro_gdiou_params:
-      depth_weight: 0.3  # 纵向(深度)惩罚权重，<1.0 表示容忍深度误差
-
-# ==================== 3. Truck (卡车，体积大且可能铰接) ====================
+# ==================== 2. Truck (卡车) ====================
 truck:
-  use_rv_match: "True" # 彻底关闭 2D 干扰，回归纯 3D 王者形态
+  use_rv_match: "True"
   rv_metric: sdiou_2d
   rv_threshold: 0.5  
   max_ages: 3
@@ -126,14 +82,14 @@ truck:
   metric_2d: iou_2d
   cost_function:
     iou_2d: 0.55
-    ro_gdiou_3d_nusc: -0.25 # Car 形状规则，继续用 ro_gdiou
+    ro_gdiou_3d_nusc: -0.25
+  fga:
+    high_conf: 0.4
+    junk_conf: 0.1
+    loc_thresh: 0.65
   cost_options:
     iou_2d_c: { w: 0.4 }
     ro_gdiou_3d_nusc: { w1: 0.5, w2: 1.5, depth_weight: 1.0 }
-  fga:
-    high_conf: 0.4
-    junk_conf: 0.1
-    loc_thresh: 0.65
 
   micro_innovation:
     # 创新点1: 置信度引导的自适应卡尔曼滤波 (CG-AKF)
@@ -161,26 +117,73 @@ truck:
     aw_ro_gdiou_params:
       depth_weight: 0.3  # 纵向(深度)惩罚权重，<1.0 表示容忍深度误差
 
-# ==================== 4. Trailer (挂车，纯铰接，极难预测 Yaw) ====================
+
+# ==================== 3. Bus (公交车) ====================
+bus:
+  use_rv_match: "True"
+  rv_metric: sdiou_2d
+  rv_threshold: 0.5  
+  max_ages: 3
+  min_frames: 1
+  metric_3d: ro_gdiou_3d_nusc
+  metric_2d: iou_2d
+  cost_function:
+    iou_2d: 0.55
+    ro_gdiou_3d_nusc: -0.25
+  fga:
+    high_conf: 0.4
+    junk_conf: 0.1
+    loc_thresh: 0.65
+  cost_options:
+    iou_2d_c: { w: 0.4 }
+    ro_gdiou_3d_nusc: { w1: 0.5, w2: 1.5, depth_weight: 1.0 }
+
+  micro_innovation:
+    # 创新点1: 置信度引导的自适应卡尔曼滤波 (CG-AKF)
+    use_cg_akf: false
+    cg_akf_params:
+      mu: 1.0  # 阈值
+      tau: 1.0 # 灵敏调节，越大膨胀噪声越少
+    # --- [新增] 2D CG-AKF 配置 ---
+    use_cg_akf_2d: false    # 2D 独立开关
+    cg_akf_2d_params:
+      mu: 3.0           # 2D 建议值 3.0 (2D框本身较抖，惩罚不宜过大)
+      tau: 1.0
+    # 创新点2: 距离感知的各向异性匹配 (Distance-Aware Matching)
+    use_dist_aware: false
+    dist_aware_params:
+      far_dist_thresh: 45.0 # 超过45米视为远距离
+      far_iou_thresh: 0.25  # 远距离放宽IoU阈值 (解决深度抖动导致IoU过低的问题)
+    # 3. [新增] 自适应过程噪声 CTRA (APN-CTRA)
+    use_apn_ctra: false
+    apn_ctra_params:
+      maneuver_factor_omega: 80.0  # 角速度影响因子
+      maneuver_factor_accel: 5.0  # 加速度影响因子
+    # 4. [新增] 各向异性加权 Ro-GDIoU (AW-Ro-GDIoU)
+    use_aw_ro_gdiou: false
+    aw_ro_gdiou_params:
+      depth_weight: 0.3  # 纵向(深度)惩罚权重，<1.0 表示容忍深度误差
+
+
+# ==================== 4. Trailer (拖车) ====================
 trailer:
-  use_rv_match: "True" # 保持与前面的结界环境一致
+  use_rv_match: "True"
   rv_metric: sdiou_2d
   rv_threshold: 0.5  
   max_ages: 3
   min_frames: 1
-  # 【核心修改 1】：抛弃 ro_gdiou，改用纯中心点距离
-  metric_3d: dist_bev_nusc 
+  metric_3d: ro_gdiou_3d_nusc
   metric_2d: iou_2d
   cost_function:
     iou_2d: 0.55
-    # 【核心修改 2】：允许预测框和检测框的中心点存在最高 2.5 米的误差
-    dist_bev_nusc: -2.5 
+    ro_gdiou_3d_nusc: -0.25
   fga:
     high_conf: 0.4
     junk_conf: 0.1
     loc_thresh: 0.65
   cost_options:
     iou_2d_c: { w: 0.4 }
+    ro_gdiou_3d_nusc: { w1: 0.5, w2: 1.5, depth_weight: 1.0 }
 
   micro_innovation:
     # 创新点1: 置信度引导的自适应卡尔曼滤波 (CG-AKF)
@@ -208,101 +211,144 @@ trailer:
     aw_ro_gdiou_params:
       depth_weight: 0.3  # 纵向(深度)惩罚权重，<1.0 表示容忍深度误差
 
-# ==================== 5. Pedestrian (行人，体积小，瞬时变向) ====================
+
+# ==================== 5. Pedestrian (行人) ====================
 pedestrian:
-  use_rv_match: "True" 
+  use_rv_match: "True"
   rv_metric: sdiou_2d
   rv_threshold: 0.5  
   max_ages: 3
   min_frames: 1
-  # 【核心修改 1】：抛弃基于 IoU 的度量，改用纯中心点距离
-  metric_3d: dist_bev_nusc 
+  metric_3d: ro_gdiou_3d_nusc
   metric_2d: iou_2d
   cost_function:
     iou_2d: 0.55
-    # 【核心修改 2】：阈值设为 -1.5，代表允许 1.5 米的中心点误差匹配
-    dist_bev_nusc: -1.5 
+    # 行人体积小，阈值可稍微放宽一点
+    ro_gdiou_3d_nusc: -0.5 
   fga:
     high_conf: 0.4
     junk_conf: 0.1
     loc_thresh: 0.65
   cost_options:
     iou_2d_c: { w: 0.4 }
+    ro_gdiou_3d_nusc: { w1: 0.5, w2: 1.5, depth_weight: 1.0 }
 
   micro_innovation:
+    # 创新点1: 置信度引导的自适应卡尔曼滤波 (CG-AKF)
     use_cg_akf: false
-    cg_akf_params: { mu: 1.0, tau: 1.0 }
-    use_cg_akf_2d: false    
-    cg_akf_2d_params: { mu: 3.0, tau: 1.0 }
+    cg_akf_params:
+      mu: 1.0  # 阈值
+      tau: 1.0 # 灵敏调节，越大膨胀噪声越少
+    # --- [新增] 2D CG-AKF 配置 ---
+    use_cg_akf_2d: false    # 2D 独立开关
+    cg_akf_2d_params:
+      mu: 3.0           # 2D 建议值 3.0 (2D框本身较抖，惩罚不宜过大)
+      tau: 1.0
+    # 创新点2: 距离感知的各向异性匹配 (Distance-Aware Matching)
     use_dist_aware: false
-    dist_aware_params: { far_dist_thresh: 45.0, far_iou_thresh: 0.25 }
+    dist_aware_params:
+      far_dist_thresh: 45.0 # 超过45米视为远距离
+      far_iou_thresh: 0.25  # 远距离放宽IoU阈值 (解决深度抖动导致IoU过低的问题)
+    # 3. [新增] 自适应过程噪声 CTRA (APN-CTRA)
     use_apn_ctra: false
-    apn_ctra_params: { maneuver_factor_omega: 80.0, maneuver_factor_accel: 5.0 }
+    apn_ctra_params:
+      maneuver_factor_omega: 80.0  # 角速度影响因子
+      maneuver_factor_accel: 5.0  # 加速度影响因子
+    # 4. [新增] 各向异性加权 Ro-GDIoU (AW-Ro-GDIoU)
     use_aw_ro_gdiou: false
-    aw_ro_gdiou_params: { depth_weight: 0.3 }
+    aw_ro_gdiou_params:
+      depth_weight: 0.3  # 纵向(深度)惩罚权重，<1.0 表示容忍深度误差
 
-# ==================== 6. Motorcycle (摩托车，体积小且速度快) ====================
+
+# ==================== 6. Motorcycle (摩托车) ====================
 motorcycle:
-  use_rv_match: "True" 
+  use_rv_match: "True"
   rv_metric: sdiou_2d
   rv_threshold: 0.5  
   max_ages: 3
   min_frames: 1
-  # 继续使用纯中心点距离，无视狭窄车身的 IoU 惩罚
-  metric_3d: dist_bev_nusc 
+  metric_3d: ro_gdiou_3d_nusc
   metric_2d: iou_2d
   cost_function:
     iou_2d: 0.55
-    # 【核心修改】：考虑到摩托车的高速移动，将匹配大网扩大到 2.0 米
-    dist_bev_nusc: -2.0 
+    ro_gdiou_3d_nusc: -0.25
   fga:
     high_conf: 0.4
     junk_conf: 0.1
     loc_thresh: 0.65
   cost_options:
     iou_2d_c: { w: 0.4 }
+    ro_gdiou_3d_nusc: { w1: 0.5, w2: 1.5, depth_weight: 1.0 }
 
   micro_innovation:
+    # 创新点1: 置信度引导的自适应卡尔曼滤波 (CG-AKF)
     use_cg_akf: false
-    cg_akf_params: { mu: 1.0, tau: 1.0 }
-    use_cg_akf_2d: false    
-    cg_akf_2d_params: { mu: 3.0, tau: 1.0 }
+    cg_akf_params:
+      mu: 1.0  # 阈值
+      tau: 1.0 # 灵敏调节，越大膨胀噪声越少
+    # --- [新增] 2D CG-AKF 配置 ---
+    use_cg_akf_2d: false    # 2D 独立开关
+    cg_akf_2d_params:
+      mu: 3.0           # 2D 建议值 3.0 (2D框本身较抖，惩罚不宜过大)
+      tau: 1.0
+    # 创新点2: 距离感知的各向异性匹配 (Distance-Aware Matching)
     use_dist_aware: false
-    dist_aware_params: { far_dist_thresh: 45.0, far_iou_thresh: 0.25 }
+    dist_aware_params:
+      far_dist_thresh: 45.0 # 超过45米视为远距离
+      far_iou_thresh: 0.25  # 远距离放宽IoU阈值 (解决深度抖动导致IoU过低的问题)
+    # 3. [新增] 自适应过程噪声 CTRA (APN-CTRA)
     use_apn_ctra: false
-    apn_ctra_params: { maneuver_factor_omega: 80.0, maneuver_factor_accel: 5.0 }
+    apn_ctra_params:
+      maneuver_factor_omega: 80.0  # 角速度影响因子
+      maneuver_factor_accel: 5.0  # 加速度影响因子
+    # 4. [新增] 各向异性加权 Ro-GDIoU (AW-Ro-GDIoU)
     use_aw_ro_gdiou: false
-    aw_ro_gdiou_params: { depth_weight: 0.3 }
+    aw_ro_gdiou_params:
+      depth_weight: 0.3  # 纵向(深度)惩罚权重，<1.0 表示容忍深度误差
 
-# ==================== 7. Bicycle (自行车，体积小且速度快) ====================
+
+# ==================== 7. Bicycle (自行车) ====================
 bicycle:
-  use_rv_match: "True" 
+  use_rv_match: "True"
   rv_metric: sdiou_2d
   rv_threshold: 0.5  
   max_ages: 3
   min_frames: 1
-  # 继续使用纯中心点距离
-  metric_3d: dist_bev_nusc 
+  metric_3d: ro_gdiou_3d_nusc
   metric_2d: iou_2d
   cost_function:
     iou_2d: 0.55
-    # 【核心修改】：速度不如摩托车快，1.5米的匹配大网足够了，收紧一点减少FP
-    dist_bev_nusc: -1.5 
+    ro_gdiou_3d_nusc: -0.25
   fga:
     high_conf: 0.4
     junk_conf: 0.1
     loc_thresh: 0.65
   cost_options:
     iou_2d_c: { w: 0.4 }
+    ro_gdiou_3d_nusc: { w1: 0.5, w2: 1.5, depth_weight: 1.0 }
 
   micro_innovation:
+    # 创新点1: 置信度引导的自适应卡尔曼滤波 (CG-AKF)
     use_cg_akf: false
-    cg_akf_params: { mu: 1.0, tau: 1.0 }
-    use_cg_akf_2d: false    
-    cg_akf_2d_params: { mu: 3.0, tau: 1.0 }
+    cg_akf_params:
+      mu: 1.0  # 阈值
+      tau: 1.0 # 灵敏调节，越大膨胀噪声越少
+    # --- [新增] 2D CG-AKF 配置 ---
+    use_cg_akf_2d: false    # 2D 独立开关
+    cg_akf_2d_params:
+      mu: 3.0           # 2D 建议值 3.0 (2D框本身较抖，惩罚不宜过大)
+      tau: 1.0
+    # 创新点2: 距离感知的各向异性匹配 (Distance-Aware Matching)
     use_dist_aware: false
-    dist_aware_params: { far_dist_thresh: 45.0, far_iou_thresh: 0.25 }
+    dist_aware_params:
+      far_dist_thresh: 45.0 # 超过45米视为远距离
+      far_iou_thresh: 0.25  # 远距离放宽IoU阈值 (解决深度抖动导致IoU过低的问题)
+    # 3. [新增] 自适应过程噪声 CTRA (APN-CTRA)
     use_apn_ctra: false
-    apn_ctra_params: { maneuver_factor_omega: 80.0, maneuver_factor_accel: 5.0 }
+    apn_ctra_params:
+      maneuver_factor_omega: 80.0  # 角速度影响因子
+      maneuver_factor_accel: 5.0  # 加速度影响因子
+    # 4. [新增] 各向异性加权 Ro-GDIoU (AW-Ro-GDIoU)
     use_aw_ro_gdiou: false
-    aw_ro_gdiou_params: { depth_weight: 0.3 }
+    aw_ro_gdiou_params:
+      depth_weight: 0.3  # 纵向(深度)惩罚权重，<1.0 表示容忍深度误差

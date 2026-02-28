@@ -8,13 +8,34 @@ from motion_module.motion_model import CTRA
 class KalmanBoxTracker(object):
     count = 0
     def __init__(self, bbox3D):
-        self.dt = 0.1  
+        # =========================================================
+        # 修复 1：适配 nuScenes 的 2Hz 物理采样率
+        # =========================================================
+        self.dt = 0.5  
         self.model = CTRA(has_velo=False, dt=self.dt)
         self.kf = KalmanFilter(dim_x=self.model.SD, dim_z=self.model.MD)
         self.kf.P = self.model.getInitCovP(2)
         self.kf.Q = self.model.getProcessNoiseQ()
         self.kf.R = self.model.getMeaNoiseR()
-        self.kf.x[:7] = bbox3D.reshape((7, 1))   
+        
+        # 初始化基础 7 维几何信息
+        # 此时传进来的 bbox3D 已经被 DeepFusionMOT 转换成了 [x, y, z, yaw, l, w, h, vx, vy]
+        self.kf.x[:7] = bbox3D[:7].reshape((7, 1))   
+        
+        # =========================================================
+        # 修复 2：极度精准的速度先验注入！
+        # =========================================================
+        if len(bbox3D) >= 9:
+            yaw = bbox3D[3]  # <--- 修改这里：yaw 在索引 3
+            vx = bbox3D[7]
+            vy = bbox3D[8]
+            
+            # 将全局 X/Y 轴的速度向量，投影到车辆自身的航向角(yaw)上
+            v = vx * np.cos(yaw) + vy * np.sin(yaw)
+            
+            # 在 CTRA 状态向量中，v 的位置是索引 7
+            self.kf.x[7] = v 
+            
         self.original_Q = self.kf.Q.copy()
 
     def DFM_to_CTRA(self, DFM_bbox3D):

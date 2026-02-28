@@ -1,8 +1,10 @@
 # -*-coding:utf-8-*
 # author: wangxy
 import numpy as np
-from tracking.cost_function import iou_2d, giou_2d, sdiou_2d, diou_2d, giou_3d, dist_3d, iou_2d_c, ro_gdiou_3d
-
+from tracking.cost_function import (
+    iou_2d, giou_2d, sdiou_2d, diou_2d, giou_3d, dist_3d, iou_2d_c, 
+    ro_gdiou_3d, dist_bev_nusc, ro_gdiou_3d_nusc
+)
 
 def linear_assignment(cost_matrix):
     try:
@@ -29,12 +31,13 @@ def kitti_cost(dets, trks, iou_threshold, iou_matrix, cost_func, cost_params=Non
             far_iou = params.get('far_iou_thresh', 0.25) # 远距离放宽要求
             
             for t, trk in enumerate(trks):
-                # 计算距离 (利用 x, z)
+                # 计算距离 (兼容 KITTI 和 nuScenes)
                 try:
-                    # 尝试从 Track 对象获取 pose (Track_3D)
-                    dist = np.sqrt(trk.pose[0]**2 + trk.pose[2]**2)
+                    if 'nusc' in cost_func:
+                        dist = np.sqrt(trk.pose[0]**2 + trk.pose[1]**2) # nuScenes (X-Y)
+                    else:
+                        dist = np.sqrt(trk.pose[0]**2 + trk.pose[2]**2) # KITTI (X-Z)
                 except:
-                    # 如果是 Track_2D 或其他情况，跳过
                     continue
                 
                 # 如果是远距离目标，使用更宽松的阈值
@@ -42,10 +45,8 @@ def kitti_cost(dets, trks, iou_threshold, iou_matrix, cost_func, cost_params=Non
                     valid_mask[:, t] = (iou_matrix[:, t] > far_iou).astype(np.int32)
 
         # 2. 执行匹配 (Linear Assignment)
-        # 将不满足阈值的点设为极小值，防止被匹配
-        # 注意: 这里输入是 -iou_matrix (求最大权匹配)，所以无效点设为 -1 (比所有可能的IoU都小)
         masked_iou_matrix = iou_matrix.copy()
-        masked_iou_matrix[valid_mask == 0] = -1.0
+        masked_iou_matrix[valid_mask == 0] = -1000.0 # 使用一个足够小的负数，防止阈值设为负数时被误匹配
         
         matched_indices = linear_assignment(-masked_iou_matrix)
         
@@ -54,12 +55,16 @@ def kitti_cost(dets, trks, iou_threshold, iou_matrix, cost_func, cost_params=Non
         for m in matched_indices:
             d_idx, t_idx = m[0], m[1]
             
-            # 获取对应的阈值 (近处严，远处松)
+            # 获取对应的阈值
             current_thresh = iou_threshold
             if dist_aware_cfg and dist_aware_cfg.get('use_dist_aware', False):
                 try:
                     trk = trks[t_idx]
-                    dist = np.sqrt(trk.pose[0]**2 + trk.pose[2]**2)
+                    if 'nusc' in cost_func:
+                        dist = np.sqrt(trk.pose[0]**2 + trk.pose[1]**2)
+                    else:
+                        dist = np.sqrt(trk.pose[0]**2 + trk.pose[2]**2)
+                        
                     if dist > dist_aware_cfg['dist_aware_params']['far_dist_thresh']:
                         current_thresh = dist_aware_cfg['dist_aware_params']['far_iou_thresh']
                 except:
@@ -98,15 +103,14 @@ def cost_calculate(dets, trks, iou_matrix, iou_threshold, cost_func, cost_params
             elif cost_func == 'ro_gdiou_3d':
                 # 默认权重 w1=1, w2=1，对应论文中两个框相距很远时趋向于 -2
                 iou_matrix[d, t] = ro_gdiou_3d(det, trk, **cost_params)
-    # if min(iou_matrix.shape) > 0:
-    #     a = (iou_matrix > iou_threshold).astype(np.int32)
-    #     if a.sum(1).max() == 1 and a.sum(0).max() == 1:
-    #         matched_indices = np.stack(np.where(a), axis=1)
-    #     else:
-    #         matched_indices = linear_assignment(-iou_matrix)
-    # else:
-    #     matched_indices = np.empty(shape=(0, 2))
-    #     # matched_indices = greedy_matching(-iou_matrix)
+            # ========================================================
+            # [新增] 路由到 nuScenes 专用的 BEV 距离度量
+            # ========================================================
+            elif cost_func == 'dist_bev_nusc':
+                iou_matrix[d, t] = dist_bev_nusc(det, trk, **cost_params)
+            elif cost_func == 'ro_gdiou_3d_nusc':
+                iou_matrix[d, t] = ro_gdiou_3d_nusc(det, trk, **cost_params)
+                
     return [], iou_matrix
 
 

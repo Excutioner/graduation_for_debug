@@ -57,6 +57,9 @@ def project_nusc_to_kitti_format(nusc, current_token, boxes_3d_filtered, indices
         q = box_dict['rotation']
         score = box_dict.get('detection_score', box_dict.get('tracking_score', 1.0))
         
+        velo = box_dict.get('velocity', [0.0, 0.0])
+        vx, vy = velo[0], velo[1]
+        
         quat = Quaternion(q)
         yaw = quat.yaw_pitch_roll[0] 
 
@@ -81,7 +84,7 @@ def project_nusc_to_kitti_format(nusc, current_token, boxes_3d_filtered, indices
             bbox_2d = [0, 0, 0, 0] 
 
         if bbox_2d != [0, 0, 0, 0]:
-            dets_3d.append([h, w, l, x, y, z, yaw])
+            dets_3d.append([h, w, l, x, y, z, yaw, vx, vy])
             dets_2d_proj.append(bbox_2d)
             type_id = 1 if category.lower() == 'car' else 2
             
@@ -107,6 +110,66 @@ def format_nusc_2d_to_kitti_format(raw_2d_boxes_dict, frame_idx, cam_name):
     if len(dets_2d) == 0:
         return np.empty((0, 7))
     return np.array(dets_2d)
+
+
+def nms_2d(boxes, scores, iou_threshold=0.5):
+    """
+    标准的 2D NMS (非极大值抑制)
+    """
+    if len(boxes) == 0:
+        return []
+    
+    x1 = boxes[:, 0]
+    y1 = boxes[:, 1]
+    x2 = boxes[:, 2]
+    y2 = boxes[:, 3]
+    areas = (x2 - x1 + 1) * (y2 - y1 + 1)
+    
+    order = scores.argsort()[::-1]
+    keep = []
+    
+    while order.size > 0:
+        i = order[0]
+        keep.append(i)
+        
+        xx1 = np.maximum(x1[i], x1[order[1:]])
+        yy1 = np.maximum(y1[i], y1[order[1:]])
+        xx2 = np.minimum(x2[i], x2[order[1:]])
+        yy2 = np.minimum(y2[i], y2[order[1:]])
+        
+        w = np.maximum(0.0, xx2 - xx1 + 1)
+        h = np.maximum(0.0, yy2 - yy1 + 1)
+        inter = w * h
+        ovr = inter / (areas[i] + areas[order[1:]] - inter)
+        
+        inds = np.where(ovr <= iou_threshold)[0]
+        order = order[inds + 1]
+        
+    return keep
+
+def nms_3d_center_distance(boxes_3d, scores, dist_threshold=0.5):
+    """
+    针对 CenterPoint 的极速 3D NMS (基于中心点欧氏距离)
+    CenterPoint本身有NMS，但这里作为二次保险，防止不同类别误检或脏数据
+    """
+    if len(boxes_3d) == 0:
+        return []
+    
+    centers = np.array([box['translation'] for box in boxes_3d]) # (N, 3)
+    order = scores.argsort()[::-1]
+    keep = []
+    
+    while order.size > 0:
+        i = order[0]
+        keep.append(i)
+        if order.size == 1:
+            break
+            
+        dist = np.linalg.norm(centers[order[1:]] - centers[i], axis=1)
+        inds = np.where(dist > dist_threshold)[0]
+        order = order[inds + 1]
+        
+    return keep
 
 # ==============================================================================
 # 主函数部分
@@ -195,7 +258,24 @@ def tracking(cfg):
                     
                     # 在一帧开始前，先全局过滤该类别的 3D 框
                     boxes_3d_filtered = [b for b in raw_3d_boxes if b.get('detection_name', b.get('tracking_name', '')).lower() == category.lower()]
-                    
+                    # NMS
+                    if len(boxes_3d_filtered) > 0:
+                        scores_3d = np.array([b.get('detection_score', b.get('tracking_score', 1.0)) for b in boxes_3d_filtered])
+                        # 距离小于 0.5 米的认为是重复框，进行抑制
+                        keep_3d_indices = nms_3d_center_distance(boxes_3d_filtered, scores_3d, dist_threshold=0.5)
+                        boxes_3d_filtered = [boxes_3d_filtered[i] for i in keep_3d_indices]
+
+                    # 2. ================= 2D 单相机 NMS 预处理 =================
+                    # 提前清洗字典里每个相机的 2D 框
+                    for c_name in raw_2d_boxes_dict.keys():
+                        cam_boxes = raw_2d_boxes_dict[c_name]
+                        if len(cam_boxes) > 0:
+                            bboxes = np.array([b['bbox'] for b in cam_boxes])
+                            scores = np.array([b['score'] for b in cam_boxes])
+                            # 2D 框 IoU > 0.4 且类别相同，抑制低分框
+                            keep_2d = nms_2d(bboxes, scores, iou_threshold=0.4)
+                            raw_2d_boxes_dict[c_name] = [cam_boxes[i] for i in keep_2d]
+                            
                     # 【核心】6 相机全局去重遮罩与汇总收集器
                     matched_3d_mask = np.zeros(len(boxes_3d_filtered), dtype=bool)
                     global_dets_3d_fusion_cam = []
@@ -244,27 +324,27 @@ def tracking(cfg):
                                 dets_2d_combined = np.empty((0, 7))
                         else:
                             dets_2d_combined = dets_high
-                        # if cam_name == 'CAM_FRONT' and frame_idx < 20: 
-                        #     vis_img = img_0.copy()
+                        if cam_name == 'CAM_FRONT' and frame_idx < 20: 
+                            vis_img = img_0.copy()
                             
-                        #     # 1. 画 2D 检测框 (红色)
-                        #     for det in dets_2d_combined:
-                        #         x1, y1, x2, y2 = map(int, det[1:5])
-                        #         cv2.rectangle(vis_img, (x1, y1), (x2, y2), (0, 0, 255), 2)
-                        #         cv2.putText(vis_img, f"2D:{det[5]:.2f}", (x1, y1 - 5), 
-                        #                     cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 0, 255), 2)
+                            # 1. 画 2D 检测框 (红色)
+                            for det in dets_2d_combined:
+                                x1, y1, x2, y2 = map(int, det[1:5])
+                                cv2.rectangle(vis_img, (x1, y1), (x2, y2), (0, 0, 255), 2)
+                                cv2.putText(vis_img, f"2D:{det[5]:.2f}", (x1, y1 - 5), 
+                                            cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 0, 255), 2)
                                 
-                        #     # 2. 画 3D 投影转 2D 框 (绿色)
-                        #     for proj_box in dets_3dto2d_image:
-                        #         x1, y1, x2, y2 = map(int, proj_box)
-                        #         if x1 == 0 and x2 == 0: 
-                        #             continue # 过滤掉不在视野内的框
-                        #         cv2.rectangle(vis_img, (x1, y1), (x2, y2), (0, 255, 0), 2)
-                        #         cv2.putText(vis_img, "3D-Proj", (x1, y2 + 15), 
-                        #                     cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 2)
+                            # 2. 画 3D 投影转 2D 框 (绿色)
+                            for proj_box in dets_3dto2d_image:
+                                x1, y1, x2, y2 = map(int, proj_box)
+                                if x1 == 0 and x2 == 0: 
+                                    continue # 过滤掉不在视野内的框
+                                cv2.rectangle(vis_img, (x1, y1), (x2, y2), (0, 255, 0), 2)
+                                cv2.putText(vis_img, "3D-Proj", (x1, y2 + 15), 
+                                            cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 2)
                                 
-                        #     os.makedirs("./debug_dets_vis", exist_ok=True)
-                        #     cv2.imwrite(f"./debug_dets_vis/frame_{frame_idx:04d}.jpg", vis_img)
+                            os.makedirs("./debug_dets_vis", exist_ok=True)
+                            cv2.imwrite(f"./debug_dets_vis/frame_{frame_idx:04d}.jpg", vis_img)
                         # --- 融合逻辑 ---
                         if len(dets_3d_camera) > 0 or len(dets_2d_combined) > 0:
                             dets_3d_fusion, _, dets_2d_only_list = \
@@ -306,17 +386,20 @@ def tracking(cfg):
                             score = box_dict.get('detection_score', box_dict.get('tracking_score', 1.0))
                             yaw = Quaternion(q).yaw_pitch_roll[0]
                             
-                            global_dets_3d_only_cam.append([h, w, l, x, y, z, yaw])
+                            velo = box_dict.get('velocity', [0.0, 0.0])
+                            vx, vy = velo[0], velo[1]
+                            
+                            global_dets_3d_only_cam.append([h, w, l, x, y, z, yaw, vx, vy])
                             type_id = 1 if category.lower() == 'car' else 2
                             global_dets_3d_only_info.append([0.0, type_id, 0, 0, 0, 0, score])
                     
                     # 构建送入 Tracker 的终极数据结构
                     final_dets_3d_fusion = {
-                        'dets_3d_fusion': np.array(global_dets_3d_fusion_cam) if len(global_dets_3d_fusion_cam) > 0 else np.empty((0, 7)),
+                        'dets_3d_fusion': np.array(global_dets_3d_fusion_cam) if len(global_dets_3d_fusion_cam) > 0 else np.empty((0, 9)),
                         'dets_3d_fusion_info': np.array(global_dets_3d_fusion_info) if len(global_dets_3d_fusion_info) > 0 else np.empty((0, 7))
                     }
                     final_dets_3d_only = {
-                        'dets_3d_only': np.array(global_dets_3d_only_cam) if len(global_dets_3d_only_cam) > 0 else np.empty((0, 7)),
+                        'dets_3d_only': np.array(global_dets_3d_only_cam) if len(global_dets_3d_only_cam) > 0 else np.empty((0, 9)),
                         'dets_3d_only_info': np.array(global_dets_3d_only_info) if len(global_dets_3d_only_info) > 0 else np.empty((0, 7))
                     }
                     final_dets_2d_high = np.array(global_dets_2d_high_tlwhc) if len(global_dets_2d_high_tlwhc) > 0 else np.empty((0, 5))

@@ -71,10 +71,20 @@ class DeepFusionMOT():
             dets_3d_fusion_camera = dets_3d_fusion_camera
         else:
             dets_3d_fusion_camera = dets_3d_fusion_camera[:, self.reorder]
+            
+            if dets_3d_fusion_camera.shape[1] >= 9:
+                dets_3d_fusion_camera = np.concatenate((dets_3d_fusion_camera, dets_3d_fusion_camera[:, 7:9]), axis=1)
+            else:
+                dets_3d_fusion_camera = dets_3d_fusion_camera
+                
         if len(dets_3d_only_camera) == 0:
             dets_3d_only_camera = dets_3d_only_camera
         else:
             dets_3d_only_camera = dets_3d_only_camera[:, self.reorder]
+            if dets_3d_only_camera.shape[1] >= 9:
+                dets_3d_only_camera = np.concatenate((dets_3d_only_camera, dets_3d_only_camera[:, 7:9]), axis=1)
+            else:
+                dets_3d_only_camera = dets_3d_only_camera
 
         dets_3d_fusion_camera = [Detection_3D_Fusion(det_fusion, dets_3d_fusion_info[i]) for i, det_fusion in enumerate(dets_3d_fusion_camera)]
         dets_3d_only_camera = [Detection_3D_only(det_only, dets_3d_only_info[i]) for i, det_only in enumerate(dets_3d_only_camera)]

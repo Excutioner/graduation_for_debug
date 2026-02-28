@@ -16,9 +16,9 @@ nusc_3d_json_path: '/datav/DeepFusionMOT/data/detections/3D/nuscenes/nusc_result
 nusc_2d_json_dir: '/datav/DeepFusionMOT/data/detections/2D/mmdetection_cascade_x101/val' 
 
 # 结果保存路径
-save_path: './nus_results'
+save_path: './nus_rogdiou3d_rv_results'
 
-motion_model: "CV"
+motion_model: "CTRA"
 # r2i默认为True，效果更好
 cmc_with_rect2imu : "False"
 
@@ -26,15 +26,62 @@ cmc_with_rect2imu : "False"
 cat_list: ['Car']
 use_fga: "False"
 Car:
-  max_ages: 25
-  min_frames: 4
-  metric_3d: iou_3d
+  use_rv_match: "True"      # 是否开启MCTrack的RV二阶段匹配
+  rv_metric: sdiou_2d       # RV阶段使用的度量，MCTrack论文推荐SDIoU
+  rv_threshold: 0.5         # RV阶段的匹配阈值  
+  max_ages: 3
+  min_frames: 1
+  # metric_3d: iou_3d
+  # [选型 1] 纯 BEV 距离 (CenterPoint 推荐玩法)
+  # metric_3d: dist_bev_nusc
+  #
+  # [选型 2] 包含形状、距离和交集的强力泛化公式
+  metric_3d: ro_gdiou_3d_nusc
   metric_2d: iou_2d
   cost_function:
     iou_2d: 0.55
     iou_3d: 0.01
+    ro_gdiou_3d: -0.25
+    ro_gdiou_3d_nusc: -0.25
+    dist_bev_nusc: -2.5
   fga:
     high_conf: 0.4
-    junk_conf: 0.2
+    junk_conf: 0.1
     loc_thresh: 0.65
-# ... 保留其他 tracker 需要的参数 ...
+  cost_options:
+    iou_2d_c:
+      w: 0.4
+    ro_gdiou_3d:
+      w1: 0.5
+      w2: 1.5
+      depth_weight: 1.0 # 默认是各向同性 (1.0)
+    ro_gdiou_3d_nusc:
+      w1: 0.5
+      w2: 1.5
+      depth_weight: 1.0 # 默认是各向同性 (1.0)
+
+  micro_innovation:
+    # 创新点1: 置信度引导的自适应卡尔曼滤波 (CG-AKF)
+    use_cg_akf: false
+    cg_akf_params:
+      mu: 1.0  # 阈值
+      tau: 1.0 # 灵敏调节，越大膨胀噪声越少
+    # --- [新增] 2D CG-AKF 配置 ---
+    use_cg_akf_2d: false    # 2D 独立开关
+    cg_akf_2d_params:
+      mu: 3.0           # 2D 建议值 3.0 (2D框本身较抖，惩罚不宜过大)
+      tau: 1.0
+    # 创新点2: 距离感知的各向异性匹配 (Distance-Aware Matching)
+    use_dist_aware: false
+    dist_aware_params:
+      far_dist_thresh: 45.0 # 超过45米视为远距离
+      far_iou_thresh: 0.25  # 远距离放宽IoU阈值 (解决深度抖动导致IoU过低的问题)
+    # 3. [新增] 自适应过程噪声 CTRA (APN-CTRA)
+    use_apn_ctra: false
+    apn_ctra_params:
+      maneuver_factor_omega: 80.0  # 角速度影响因子
+      maneuver_factor_accel: 5.0  # 加速度影响因子
+    # 4. [新增] 各向异性加权 Ro-GDIoU (AW-Ro-GDIoU)
+    use_aw_ro_gdiou: false
+    aw_ro_gdiou_params:
+      depth_weight: 0.3  # 纵向(深度)惩罚权重，<1.0 表示容忍深度误差

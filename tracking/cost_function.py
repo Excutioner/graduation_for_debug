@@ -505,3 +505,87 @@ def convert_3dbox_to_8corner(bbox3d_input):
     corners_3d[2, :] = corners_3d[2, :] + bbox3d[2]  # z
 
     return np.transpose(corners_3d)
+
+def dist_bev_nusc(box_a, box_b, **kwargs):
+    """
+    【新增】nuScenes 专用的 BEV 中心点距离代价函数
+    输入: [x, y, z, yaw, l, w, h] (前三维为 X, Y, Z)
+    """
+    if not isinstance(box_b, list) and not isinstance(box_b, np.ndarray):
+        box_b = box_b.pose.tolist() 
+    if not isinstance(box_a, list) and not isinstance(box_a, np.ndarray):
+        box_a = box_a.bbox.tolist() 
+        
+    dx = box_a[0] - box_b[0] # nuScenes 的 BEV 位于 X-Y 平面
+    dy = box_a[1] - box_b[1] 
+    dist = np.sqrt(dx**2 + dy**2)
+    
+    # 返回负距离以匹配匈牙利匹配(lapjv)求最大值的逻辑
+    return -dist
+
+def get_nusc_bev_corners(box):
+    """
+    【新增】计算 nuScenes 格式 3D 框的 BEV (X-Y) 平面四个角点
+    """
+    cx, cy = box[0], box[1]
+    yaw = box[3]
+    l, w = box[4], box[5]
+    
+    c, s = np.cos(yaw), np.sin(yaw)
+    R = np.array([[c, -s], [s, c]])
+    
+    # nuScenes中，w对应X轴, l对应Y轴
+    corners = np.array([
+        [w/2, l/2],
+        [-w/2, l/2],
+        [-w/2, -l/2],
+        [w/2, -l/2]
+    ])
+    
+    rotated_corners = np.dot(corners, R.T)
+    rotated_corners[:, 0] += cx
+    rotated_corners[:, 1] += cy
+    return rotated_corners
+
+def ro_gdiou_3d_nusc(box_a, box_b, w1=0.5, w2=1.5, **kwargs):
+    """
+    【新增】nuScenes 专用的 X-Y BEV 平面 Ro-GDIoU
+    """
+    if not isinstance(box_b, list) and not isinstance(box_b, np.ndarray):
+        box_b = box_b.pose.tolist() 
+    if not isinstance(box_a, list) and not isinstance(box_a, np.ndarray):
+        box_a = box_a.bbox.tolist() 
+    
+    boxa_bot = get_nusc_bev_corners(box_a)
+    boxb_bot = get_nusc_bev_corners(box_b)
+    
+    # 1. 计算 IoU
+    I_2D = compute_inter_2D(boxa_bot, boxb_bot)
+    area_a = box_a[4] * box_a[5]
+    area_b = box_b[4] * box_b[5]
+    U_2D = area_a + area_b - I_2D
+    iou = I_2D / (U_2D + 1e-6)
+    
+    # 2. 计算 GIoU 惩罚
+    C_2D = convex_area(boxa_bot, boxb_bot)
+    if C_2D <= 0:
+        giou_penalty = 0
+    else:
+        giou_penalty = (C_2D - U_2D) / C_2D
+        
+    # 3. 计算 DIoU 惩罚
+    dx = box_a[0] - box_b[0]
+    dy = box_a[1] - box_b[1]
+    c2 = dx**2 + dy**2
+    
+    all_corners = np.vstack((boxa_bot, boxb_bot))
+    x_min, y_min = np.min(all_corners, axis=0)
+    x_max, y_max = np.max(all_corners, axis=0)
+    d2 = (x_max - x_min)**2 + (y_max - y_min)**2
+    
+    if d2 <= 0:
+        diou_penalty = 0
+    else:
+        diou_penalty = c2 / d2
+        
+    return iou - w1 * giou_penalty - w2 * diou_penalty

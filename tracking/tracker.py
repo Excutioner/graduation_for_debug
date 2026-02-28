@@ -87,6 +87,7 @@ class Tracker():
         
         if cfg.dataset == 'nuscenes':
             if cfg.get('motion_model', 'CV') == 'CTRA':
+                # print("Using CTRA motion model for nuscenes dataset")
                 from tracking.extend_kalman_fileter_3d_ctra_nusc import KalmanBoxTracker
             else:
                 from tracking.kalman_fileter_3d import KalmanBoxTracker  # CV 无需修改，通用！

@@ -4,7 +4,7 @@ spilt: 'val'
 # 这里的 3 对应 main.py 里的 'scene-0003'。你可以换成你 json 里确实存在的场景编号
 tracking_seqs: [3]  
 if_cmc: 'False' # nuScenes 下强制关闭 CMC
-
+save_2d_image: "True"
 kfstate_2d: "xyah"
 
 root_path: 'Debug/NUSCENES'
